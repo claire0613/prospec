@@ -63,7 +63,7 @@ subject_skips? }`, adopted **verbatim**.
 | `canonical-doc-drift` | `warn` | Flags canonical project docs drifting from rendered canonical templates. | File absent. |
 | `delta-spec-landing-fidelity` | `fail` | Flags MODIFIED `**Spec:**` blocks that drop undeclared `WHEN/THEN` bullets or are empty. | ADDED entries, no `**Spec:**` block, no changes dir. |
 | `req-id-uniqueness` | `fail` | Flags duplicate REQ ID definitions across Feature Specs (slices grouped with parent). | Specs absent or unparseable. |
-| `language-policy-drift` | `warn` | Flags a Constitution whose Language Policy Description no longer matches the one generated for the resolved language scope, or still carries the old seed (the old English seed in an English-only project passes — nothing to migrate). | Constitution unreadable, no Language Policy principle, or no `**Description**:` field. |
+| `language-policy-drift` | `warn` | Flags a Constitution Language Policy Description that differs from the one generated for the resolved language scope, or keeps the old seed (an English-only project's old English seed passes). | Constitution unreadable, no Language Policy principle, or no `**Description**:` field. |
 | `task-completion` | `warn`/`fail` | Tracks code-task completion in `tasks.md` (`[M]`/`[V]` excluded). | No tasks.md. |
 | `constitution-severity` | `warn` | Checks Constitution principles for RFC-2119 severity tags (`MUST`/`SHOULD`/`MAY`). | Constitution missing or empty. |
 | `knowledge-health` | `warn`/`fail` | Reports freshness and coverage; see `structural.knowledge_health` below. | Module map unavailable. |
@@ -77,10 +77,12 @@ subject_skips? }`, adopted **verbatim**.
 `{ check, severity, source_path, line?, detail, knowledge_size? }`. Findings exist **only** for
 `warn`/`fail` outcomes (`pass`/`skipped` produce none). `severity` ∈ `warn` | `fail`. For
 `check: 'task-completion'`, each finding carries the `source_path` + `line` of one unchecked code
-task — use these, don't recount tasks.md. For `check: 'knowledge-size'`, each finding also carries an
-optional `knowledge_size` object — `{ surface, budget_key, budget, actual, unit, tier, remedy? }`, the
-structured facts behind its `detail` (additive, so a report without it still validates); `unit` ∈
-`tokens` | `lines`, `tier` ∈ `over` | `headroom`, `remedy` absent for `headroom`.
+task — use these, don't recount tasks.md. A file's `knowledge-size` finding carries additive
+`knowledge_size` — `{ surface, budget_key, budget, actual, unit, tier, remedy?, base_commit?, base_actual?,
+ratchet_skipped? }`; `unit` ∈ `tokens` | `lines`, `tier` ∈ `over` | `headroom` (no `remedy`). It is `warn`;
+under `knowledge.size_ratchet`, an over-budget L1/L2 unit larger than at merge-base `base_commit`
+(`base_actual`, `null` = absent) is `fail`, `ratchet_skipped` says why it went uncompared, and an
+unresolvable ratchet is a `fail` on `.prospec.yaml`.
 
 ## `structural.knowledge_health` (optional) — module freshness + coverage
 
@@ -93,16 +95,16 @@ structured facts behind its `detail` (additive, so a report without it still val
 }
 ```
 
-- Staleness is the boolean `stale` on **each element of `modules[]`**; there is **no** top-level
-  `stale[]` — filter: `knowledge_health.modules.filter(m => m.stale)`.
-- `last_verified`: the confirmation time `prospec knowledge verify` stamps; **absent** when undeclared.
+- `stale` is a boolean per **`modules[]` element** (**no** top-level `stale[]`) — filter
+  `knowledge_health.modules.filter(m => m.stale)`.
+- `last_verified`: the time `prospec knowledge verify` stamps; **absent** when undeclared.
 - `freshness` `{ basis, recorded_digest?, current_digest?, reason? }` reproduces `stale` (true unless
   `basis` is `digest-match`). `basis` by precedence: `unverified` (no README or parsable `last_verified`),
   `no-digest` (no current-version `source_digest`), `unavailable` (`reason` says why), then
   `digest-match` / `digest-mismatch`. No README also yields a `coverage gap` finding.
-- The commit-time keys stay for continuity (`last_sub_module_commit` **absent** without sub-modules,
-  never null-filled), never drive `stale`, and are null/absent when commit times are unavailable (shallow, unborn HEAD).
-- `coverage` is `{ documented, total }` README counts. The whole object is **optional** (absent without
+- Commit-time keys stay for continuity, never drive `stale`, and are null/absent without commit times
+  (shallow, unborn HEAD); `last_sub_module_commit` is **absent** without sub-modules, never null-filled.
+- `coverage` is `{ documented, total }` README counts. The object is **optional** (absent without
   a module map) → "no freshness facts", not all-fresh.
 
 ## `structural.constitution` (optional) — the rule inventory verify audits against
@@ -122,7 +124,7 @@ structured facts behind its `detail` (additive, so a report without it still val
 - `severity` ∈ `MUST` | `SHOULD` | `MAY` | `null`. `null` = no RFC-2119 tag — **never** defaulted;
   `constitution-severity` warns on it.
 - When the inventory has rules but **no project-authored** principle (only the seeded examples +
-  Language Policy remain after subtracting the starter set), `constitution-severity` warns with one
+  Language Policy remain), `constitution-severity` warns with one
   whole-document finding (no `line`): nothing real to grade.
 - `prospec-verify` 3/5 audits against this list: a statement for each rule with no `check:`, a `covers:` gap, or a not-adjudicated check, taking each
   severity from here and filling machine verdicts from declared `check_id`s, not re-reading the file — so no rule is skipped or reassigned. Judging a
@@ -132,6 +134,6 @@ structured facts behind its `detail` (additive, so a report without it still val
 
 ## `semantic` and `summary`
 
-- `semantic.status` is **always** `not-checked` — semantic consistency is `prospec-review`'s
-  job and must never be presented as `pass` from this report.
+- `semantic.status` is **always** `not-checked` — that is `prospec-review`'s job; never present
+  it as `pass`.
 - `summary` carries `fail_count` / `warn_count` / `skipped_count` (aggregates over `checks`).

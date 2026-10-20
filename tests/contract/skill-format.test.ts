@@ -4553,6 +4553,8 @@ describe('Startup Loading cache-stable prefix ordering (REQ-TEMPLATES-080/081)',
   // retain-failing-verdicts: per-rule applicability expands the payload reference 3_202 → 3_246;
   // equivalent backfill guidance compaction reduces 1_265 → 1_196. Both ceiling anchors remain unchanged.
   // Review removes metadata-format's unconditional human-confirmation premise: 3_999 → 3_978.
+  // ratchet-knowledge-size: drift-report-format gained the size-ratchet fields and the shared
+  // knowledge-loading-rules partial names the ratchet, with equivalent prose compacted. Anchors unchanged.
   const REFERENCE_CEILING_ANCHOR = 52_315;
   const CUMULATIVE_CEILING_ANCHOR = 91_150;
 
