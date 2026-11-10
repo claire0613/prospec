@@ -27,6 +27,7 @@ import type {
   ModuleTimestamps,
   ImportEdgeSource,
   KnowledgeSizeItem,
+  KnowledgeSizeRatchetCause,
   KnowledgeSizeSource,
   LinkSource,
   McpReadmeCountSource,
@@ -757,8 +758,9 @@ export function evaluateMetadataCompleteness(src: MetadataCompletenessSource): C
  * `knowledge.size_ratchet` configured, an over-budget unit of a ratchet-governed
  * kind (L1/L2) that grew past its merge-base size fails instead (REQ-LIB-111) —
  * existing debt stays a warn, new debt breaks the build — and a ratchet that cannot
- * be resolved fails closed on `.prospec.yaml`. L0 (agent-injected config) is out of
- * scope. An unavailable source (no knowledge base) skips, never a fabricated pass.
+ * be resolved fails closed on `.prospec.yaml`, naming the fix for its cause. L0
+ * (agent-injected config) is out of scope. An unavailable source (no knowledge base)
+ * skips, never a fabricated pass.
  */
 export function evaluateKnowledgeSize(src: KnowledgeSizeSource): CheckOutcome {
   if (!src.available) {
@@ -784,9 +786,7 @@ export function evaluateKnowledgeSize(src: KnowledgeSizeSource): CheckOutcome {
       check: 'knowledge-size',
       severity: 'fail',
       source_path: '.prospec.yaml',
-      detail:
-        `knowledge.size_ratchet${base} cannot be resolved: ${ratchet.reason} — fetch the base ref with ` +
-        'full history (CI: `actions/checkout` with `fetch-depth: 0`), or correct `knowledge.size_ratchet.base`',
+      detail: `knowledge.size_ratchet${base} cannot be resolved: ${ratchet.reason} — ${RATCHET_REMEDY[ratchet.cause]}`,
     });
   }
   const overUnit = (
@@ -879,6 +879,18 @@ export function evaluateUnsupportedModulePaths(src: UnsupportedModulePathSource)
   }));
   return outcome('unsupported-module-path', findings);
 }
+
+/** The fix an unresolvable ratchet names, by cause — so a mistyped base is not sent to
+ *  CI's checkout depth, nor a shallow clone to `.prospec.yaml`. `ref` cannot tell an
+ *  unknown ref from missing history or a failed read, so it names all three. */
+const RATCHET_REMEDY: Record<KnowledgeSizeRatchetCause, string> = {
+  config: 'correct `knowledge.size_ratchet.base`',
+  history: 'fetch the base ref with full history (CI: `actions/checkout` with `fetch-depth: 0`)',
+  ref:
+    'correct `knowledge.size_ratchet.base`, or fetch the base ref with full history ' +
+    '(CI: `actions/checkout` with `fetch-depth: 0`), then re-run',
+  environment: 're-run inside a git work tree whose objects git can read',
+};
 
 /**
  * The ratchet's verdict on one over-budget unit: undefined when the ratchet does

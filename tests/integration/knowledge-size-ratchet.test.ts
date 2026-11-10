@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { collectKnowledgeSize, type KnowledgeSizeSource } from '../../src/lib/drift-sources.js';
@@ -41,6 +41,9 @@ function initRepo(projectSubdir = ''): void {
   git(root, 'config', 'user.name', 'test');
   git(root, 'config', 'user.email', 'test@example.com');
   git(root, 'config', 'core.autocrlf', 'false');
+  // `git init` derives this from the filesystem (true on macOS, false on Linux); pin it
+  // so every case below takes the same branch on every platform.
+  git(root, 'config', 'core.ignorecase', 'false');
   write('prospec/index.md', 'index\n');
   write(README, `${'A'.repeat(399)}\n`); // 400 chars → 100 tokens, over the 50 budget
   git(root, 'add', '.');
@@ -169,6 +172,111 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, rel)).toMatchObject({ severity: 'warn' });
   });
 
+  // PR #406 review P1: a path the merge-base tree cannot list because an ancestor is a
+  // link there is not new debt — the content was behind the link.
+  it.skipIf(process.platform === 'win32')('skips a file whose parent directory was a symlink at the merge-base and is a real directory now', () => {
+    write('prospec/ai-knowledge/real/README.md', 'A'.repeat(400));
+    mkdirSync(path.join(project, 'prospec/ai-knowledge/modules'), { recursive: true });
+    symlinkSync('../real', path.join(project, 'prospec/ai-knowledge/modules/lib'));
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'symlinked module directory');
+    git(root, 'branch', '-f', 'base');
+    unlinkSync(path.join(project, 'prospec/ai-knowledge/modules/lib')); // a symlink: rmSync refuses a link to a directory on Node 25
+    write('prospec/ai-knowledge/modules/lib/README.md', 'A'.repeat(400));
+    git(root, 'add', '-A');
+    git(root, 'commit', '-qm', 'materialize the module directory');
+    const rel = 'prospec/ai-knowledge/modules/lib/README.md';
+    const src = collect({ base: 'base' });
+    expect(src.ratchet).toMatchObject({ status: 'resolved' });
+    expect(itemAt(src, rel).ratchet).toEqual({ skipped: 'prospec/ai-knowledge/modules/lib is a symlink at the merge-base' });
+    expect(findingAt(src, rel)).toMatchObject({ severity: 'warn', knowledge_size: { ratchet_skipped: expect.stringContaining('symlink') } });
+  });
+
+  it('skips every file inside a knowledge base that is a submodule (gitlink) at the merge-base', () => {
+    const sub = mkdtempSync(path.join(os.tmpdir(), 'size-ratchet-sub-'));
+    try {
+      git(sub, 'init', '-q', '-b', 'main');
+      git(sub, 'config', 'user.name', 'test');
+      git(sub, 'config', 'user.email', 'test@example.com');
+      mkdirSync(path.join(sub, 'modules/lib'), { recursive: true });
+      writeFileSync(path.join(sub, 'modules/lib/README.md'), 'A'.repeat(400));
+      git(sub, 'add', '.');
+      git(sub, 'commit', '-qm', 'knowledge');
+      rmSync(path.join(project, 'prospec/ai-knowledge'), { recursive: true, force: true });
+      git(root, 'rm', '-rq', '--cached', 'prospec/ai-knowledge');
+      git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', sub, 'prospec/ai-knowledge');
+      git(root, 'commit', '-qm', 'knowledge base as a submodule');
+      git(root, 'branch', '-f', 'base');
+      const rel = 'prospec/ai-knowledge/modules/lib/README.md';
+      const src = collect({ base: 'base' });
+      expect(src.ratchet).toMatchObject({ status: 'resolved' });
+      expect(itemAt(src, rel).ratchet).toEqual({ skipped: 'prospec/ai-knowledge is a gitlink at the merge-base' });
+      expect(findingAt(src, rel)).toMatchObject({ severity: 'warn' });
+    } finally {
+      rmSync(sub, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['a directory (040000)', () => {
+      rmSync(path.join(project, README));
+      write(`${README}/inner.md`, 'x\n');
+      git(root, 'add', '-A');
+    }, '040000'],
+    ['a gitlink (160000)', () => {
+      git(root, 'rm', '-q', '--cached', README);
+      git(root, 'update-index', '--add', '--cacheinfo', `160000,${git(root, 'rev-parse', 'HEAD').trim()},${README}`);
+    }, '160000'],
+  ])('skips a file whose exact path was %s at the merge-base, and keeps the ratchet resolved', (_label, arrange, mode) => {
+    arrange();
+    git(root, 'commit', '-qm', 'readme path is not a regular file');
+    git(root, 'branch', '-f', 'base');
+    if (mode === '040000') rmSync(path.join(project, README), { recursive: true, force: true });
+    else git(root, 'rm', '-q', '--cached', README);
+    write(README, 'A'.repeat(400));
+    const src = collect({ base: 'base' });
+    expect(src.ratchet).toMatchObject({ status: 'resolved' });
+    expect(itemAt(src, README).ratchet).toEqual({ skipped: `not a regular file at the merge-base (mode ${mode})` });
+    expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+  });
+
+  // PR #406 review P2: a case-only directory rename on a case-insensitive repository is
+  // looked up under the index's own spelling. `core.ignorecase` is set explicitly, so the
+  // case runs on a case-sensitive filesystem (Linux CI) as well.
+  describe('with core.ignorecase', () => {
+    const renameDir = (from: string, to: string): void => {
+      const dir = path.join(project, 'prospec/ai-knowledge/modules');
+      renameSync(path.join(dir, from), path.join(dir, `${from}.tmp`));
+      renameSync(path.join(dir, `${from}.tmp`), path.join(dir, to));
+    };
+
+    it('measures a directory renamed only in case under its index path', () => {
+      git(root, 'config', 'core.ignorecase', 'true');
+      renameDir('x', 'X');
+      const rel = 'prospec/ai-knowledge/modules/X/README.md';
+      const src = collect({ base: 'base' });
+      expect(itemAt(src, rel).ratchet).toEqual({ base: { tokens: 100, lines: 1 } });
+      expect(findingAt(src, rel)).toMatchObject({ severity: 'warn' });
+    });
+
+    it('skips a file that more than one index path matches case-insensitively', () => {
+      git(root, 'config', 'core.ignorecase', 'true');
+      const blob = git(root, 'rev-parse', `HEAD:${README}`).trim();
+      git(root, 'update-index', '--add', '--cacheinfo', `100644,${blob},prospec/ai-knowledge/modules/X/README.md`);
+      const src = collect({ base: 'base' });
+      expect(itemAt(src, README).ratchet).toMatchObject({ skipped: expect.stringContaining('more than one index path') });
+      expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+    });
+
+    it('keeps the exact-case lookup when core.ignorecase is false', () => {
+      renameDir('x', 'X');
+      const rel = 'prospec/ai-knowledge/modules/X/README.md';
+      const src = collect({ base: 'base' });
+      expect(itemAt(src, rel).ratchet).toEqual({ base: null });
+      expect(findingAt(src, rel)).toMatchObject({ severity: 'fail' });
+    });
+  });
+
   it.each([
     ['an unknown ref', () => ({ base: 'no-such-ref' })],
     ['a base with no common ancestor', () => {
@@ -212,6 +320,121 @@ describe('collectKnowledgeSize — project below the repository root', () => {
     const src = collect({ base: 'base' });
     expect(itemAt(src, README).ratchet).toEqual({ base: { tokens: 100, lines: 1 } });
     expect(findingAt(src, README)).toMatchObject({ severity: 'fail' });
+  });
+
+  // Review R-9 pin: the project directory is a real directory at the merge-base, so a
+  // file absent there is new debt — the project-directory lookup must not skip it.
+  it('fails a committed file that is new since the merge-base', () => {
+    write('prospec/ai-knowledge/modules/y/README.md', 'C'.repeat(400));
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'new module');
+    const rel = 'prospec/ai-knowledge/modules/y/README.md';
+    const src = collect({ base: 'base' });
+    expect(itemAt(src, rel).ratchet).toEqual({ base: null });
+    expect(findingAt(src, rel)).toMatchObject({ severity: 'fail' });
+  });
+});
+
+// Review R-1 pin: the link sits on the project directory or above it, so no
+// project-relative ancestor names it — the lookup must reach past the project prefix.
+describe('collectKnowledgeSize — a link at the merge-base on the project directory or above it', () => {
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const linkAtBase = (projectSubdir: string, link: string, mode: string, kind: string): void => {
+    initRepo(projectSubdir);
+    // Replace `link` in the index only (the working tree keeps the real files), commit
+    // that as the base, then commit the real directory back with identical content.
+    git(root, '--literal-pathspecs', 'rm', '-rq', '--cached', link);
+    const target = mode === '160000'
+      ? git(root, 'rev-parse', 'HEAD').trim()
+      : execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: 'elsewhere', encoding: 'utf-8' }).trim();
+    git(root, 'update-index', '--add', '--cacheinfo', `${mode},${target},${link}`);
+    git(root, 'commit', '-qm', `${link} as a ${kind}`);
+    git(root, 'branch', '-f', 'base');
+    git(root, '--literal-pathspecs', 'rm', '-q', '--cached', link);
+    git(root, '--literal-pathspecs', 'add', link);
+    git(root, 'commit', '-qm', `materialize ${link}`);
+    const src = collect({ base: 'base' });
+    expect(src.ratchet).toMatchObject({ status: 'resolved' });
+    expect(itemAt(src, README).ratchet).toEqual({ skipped: `${link} is a ${kind} at the merge-base` });
+    expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+  };
+
+  it.each([
+    ['the project directory is a gitlink', 'sub', 'sub', '160000', 'gitlink'],
+    ['the project directory is a symlink', 'sub', 'sub', '120000', 'symlink'],
+    ['a directory above the project is a symlink', 'outer/sub', 'outer', '120000', 'symlink'],
+  ])('skips an unchanged over-budget file when %s at the merge-base', (_label, projectSubdir, link, mode, kind) => {
+    linkAtBase(projectSubdir, link, mode, kind);
+  });
+
+  // Review R-1 (round 2) pin: a repository directory name is a path, never pathspec
+  // magic — `:outer` would otherwise match `outer`, and `:!x` would fail the listing.
+  it.skipIf(process.platform === 'win32').each([
+    ['a magic-looking name', ':outer/sub', ':outer'],
+    ['an exclude-magic name', ':!x/sub', ':!x'],
+  ])('skips an unchanged over-budget file under %s that was a symlink at the merge-base', (_label, projectSubdir, link) => {
+    linkAtBase(projectSubdir, link, '120000', 'symlink');
+  });
+});
+
+// Review R-1 (round 3) pin: `:(literal)` is itself read literally under an inherited
+// GIT_LITERAL_PATHSPECS=1 (a hook run by `git --literal-pathspecs commit`), so the
+// ratchet's reads must not inherit the pathspec-mode variables.
+describe('collectKnowledgeSize — under an inherited GIT_LITERAL_PATHSPECS=1', () => {
+  afterEach(() => {
+    delete process.env.GIT_LITERAL_PATHSPECS;
+    rmSync(root, { recursive: true, force: true });
+  });
+  const collectLiteral = (ratchet: unknown): KnowledgeSizeSource => {
+    process.env.GIT_LITERAL_PATHSPECS = '1';
+    try {
+      return collect(ratchet);
+    } finally {
+      delete process.env.GIT_LITERAL_PATHSPECS;
+    }
+  };
+
+  it('keeps an unchanged over-budget file measured at the merge-base', () => {
+    initRepo();
+    const src = collectLiteral({ base: 'base' });
+    expect(itemAt(src, README).ratchet).toEqual({ base: { tokens: 100, lines: 1 } });
+    expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+  });
+
+  it('still finds a project directory that was a symlink at the merge-base', () => {
+    initRepo('sub');
+    git(root, 'rm', '-rq', '--cached', 'sub');
+    const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: root, input: 'elsewhere', encoding: 'utf-8' }).trim();
+    git(root, 'update-index', '--add', '--cacheinfo', `120000,${blob},sub`);
+    git(root, 'commit', '-qm', 'sub as a symlink');
+    git(root, 'branch', '-f', 'base');
+    git(root, 'rm', '-q', '--cached', 'sub');
+    git(root, 'add', 'sub');
+    git(root, 'commit', '-qm', 'materialize sub');
+    const src = collectLiteral({ base: 'base' });
+    expect(itemAt(src, README).ratchet).toEqual({ skipped: 'sub is a symlink at the merge-base' });
+    expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+  });
+});
+
+// Review R-1 (round 2) pin: a knowledge path inside the project is a literal pathspec
+// too, so a base directory spelled like magic is still found at the merge-base.
+describe('collectKnowledgeSize — a knowledge directory spelled like pathspec magic', () => {
+  beforeEach(() => initRepo());
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it.skipIf(process.platform === 'win32')('measures a file under `:kb` at the merge-base', () => {
+    const rel = ':kb/ai-knowledge/modules/x/README.md';
+    write(':kb/index.md', 'index\n');
+    write(rel, `${'A'.repeat(399)}\n`);
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'magic-looking knowledge directory');
+    git(root, 'branch', '-f', 'base');
+    const src = collectKnowledgeSize(project, path.join(project, ':kb'), path.join(project, ':kb', 'ai-knowledge'), BUDGET, [], { base: 'base' }, true);
+    expect(src.ratchet).toMatchObject({ status: 'resolved' });
+    expect(itemAt(src, rel).ratchet).toEqual({ base: { tokens: 100, lines: 1 } });
+    expect(findingAt(src, rel)).toMatchObject({ severity: 'warn' });
   });
 });
 

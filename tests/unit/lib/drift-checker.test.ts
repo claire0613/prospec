@@ -496,7 +496,7 @@ describe('evaluateKnowledgeSize — size ratchet (REQ-LIB-111)', () => {
   it('fails closed on an unresolvable ratchet: one .prospec.yaml finding with no knowledge_size, items stay plain warn (REQ-LIB-054)', () => {
     const r = evaluateKnowledgeSize({
       ...sizeSrc([{ source_path: INDEX, kind: 'l1', tokens: 2715, lines: 60 }]),
-      ratchet: { status: 'unresolvable', base_ref: 'origin/main', reason: 'shallow git clone (commit history incomplete)' },
+      ratchet: { status: 'unresolvable', cause: 'history', base_ref: 'origin/main', reason: 'shallow git clone (commit history incomplete)' },
     });
     expect(r.result.status).toBe('fail');
     const config = r.findings.find((f) => f.source_path === '.prospec.yaml')!;
@@ -509,13 +509,51 @@ describe('evaluateKnowledgeSize — size ratchet (REQ-LIB-111)', () => {
     expect(item.knowledge_size).toEqual(expect.not.objectContaining({ base_commit: expect.anything() }));
   });
 
+  // REQ-LIB-111 — the fix an unresolvable ratchet names follows its cause, so a
+  // mistyped base is never sent to CI's fetch-depth and a shallow clone is never
+  // told to edit `.prospec.yaml`.
+  describe('the fix an unresolvable ratchet names', () => {
+    const fixFor = (cause: 'config' | 'history' | 'ref' | 'environment'): string =>
+      evaluateKnowledgeSize({
+        ...sizeSrc([{ source_path: INDEX, kind: 'l1', tokens: 2715, lines: 60 }]),
+        ratchet: { status: 'unresolvable', cause, base_ref: 'origin/main', reason: 'the reason' },
+      }).findings.find((f) => f.source_path === '.prospec.yaml')!.detail;
+
+    it('names knowledge.size_ratchet.base, not fetch-depth, for a malformed value', () => {
+      const detail = fixFor('config');
+      expect(detail).toContain('the reason');
+      expect(detail).toContain('knowledge.size_ratchet.base');
+      expect(detail).not.toContain('fetch-depth');
+    });
+
+    it('names fetch-depth: 0, not the base, for a shallow clone', () => {
+      const detail = fixFor('history');
+      expect(detail).toContain('fetch-depth: 0');
+      expect(detail).not.toContain('knowledge.size_ratchet.base');
+    });
+
+    it('names both fixes and a re-run when no merge-base was found', () => {
+      const detail = fixFor('ref');
+      expect(detail).toContain('knowledge.size_ratchet.base');
+      expect(detail).toContain('fetch-depth: 0');
+      expect(detail).toMatch(/re-run/);
+    });
+
+    it('asks for a re-run inside a readable git work tree, without fetch-depth, for any other cause', () => {
+      const detail = fixFor('environment');
+      expect(detail).toMatch(/re-run[^.]*git work tree/);
+      expect(detail).not.toContain('fetch-depth');
+      expect(detail).not.toContain('knowledge.size_ratchet.base');
+    });
+  });
+
   it('still skips when the knowledge base is absent, whatever the ratchet says', () => {
     const r = evaluateKnowledgeSize({
       available: false,
       reason: 'source unavailable: knowledge base not found',
       budget: SIZE_BUDGET,
       items: [],
-      ratchet: { status: 'unresolvable', reason: 'not a git work tree' },
+      ratchet: { status: 'unresolvable', cause: 'environment', reason: 'not a git work tree' },
     });
     expect(r.result.status).toBe('skipped');
     expect(r.findings).toHaveLength(0);

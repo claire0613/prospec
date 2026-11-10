@@ -11,6 +11,8 @@
  * reader also serves project listings with each consumer's environment policy;
  * submodule listings use the fixed environment because their cwd is another
  * repository.
+ * The knowledge-size ratchet's case-insensitive index listing reads through
+ * `gitReadRecords` too: its fixed environment keeps the `:(icase,literal)` magic intact.
  *
  * `GIT_READ_TIMEOUT_MS` and `failureLine` are shared beyond the delegation path; the
  * CLI entry's work-tree probe uses them, and this module imports only Node built-ins

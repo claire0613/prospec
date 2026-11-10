@@ -98,6 +98,7 @@ modules:
       - token-accounting
       - drift-checker
       - drift-sources
+      - size-ratchet
       - spec-headings
       - spec-slices
       - spec-counters
@@ -143,8 +144,8 @@ modules:
       - 漂移檢查
       - 知識讀取
     rationale: Foundational infrastructure shared across services and benchmark scripts
-    last_verified: 2026-11-09T06:58:22.914Z
-    source_digest: source-v1:2006a09158c243496dd4ac5daa80f33eb2da2f36bf3670983bbd0f21ab570815
+    last_verified: 2026-11-09T06:59:02.463Z
+    source_digest: source-v1:49e3bf8f4e3f25c957157f42db8d9b842625a863477885924034d7c28e0ecee1
   - name: services
     description: Business logic — one `execute()` service per command — including
       shared-output agent invocation-guidance rendering — init / quickstart /
@@ -312,11 +313,11 @@ modules:
       - 複雜度適配
       - CI 閘門
     rationale: Pure resources — no logic, consumed by lib/template.ts
-    last_verified: 2026-11-09T06:58:22.914Z
-    source_digest: source-v1:97fca9ccf44f0600df93f787644372d7c26c07b33678bde51f2033756ad357e4
+    last_verified: 2026-11-09T06:59:02.463Z
+    source_digest: source-v1:c541f73ae8d15fa7c77eb03d798db3607915d34a0aea2e639535d07bb9efd615
   - name: tests
-    description: 4-layer test suite — 349 files, 9,477 tests (unit 6832 + contract
-      2098 + integration 285 + e2e 262). Validates every module — format and
+    description: 4-layer test suite — 350 files, 9,593 tests (unit 6883 + contract
+      2130 + integration 318 + e2e 262). Validates every module — format and
       public-document contracts, the cli-first probe + station-command
       contracts, the drift engine, retained workflow/startup guards, and the MCP
       protocol over in-memory transport. Real-worktree history fixtures cover
@@ -362,5 +363,5 @@ modules:
       - 驗證
       - vitest
     rationale: Quality gate — validates all layers with pyramid coverage
-    last_verified: 2026-11-09T06:58:22.914Z
-    source_digest: source-v1:02ed71ea631c49867da1ce7968c5b3b1a0a00579295a29b76dc150d8c2e3ff68
+    last_verified: 2026-11-09T06:59:02.463Z
+    source_digest: source-v1:dc08efb8997cd2814a32690aeb077969f04cf6dcd5b2d6e3e80b0ac57d31e66b

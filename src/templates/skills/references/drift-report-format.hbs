@@ -81,8 +81,9 @@ task — use these, don't recount tasks.md. A file's `knowledge-size` finding ca
 `knowledge_size` — `{ surface, budget_key, budget, actual, unit, tier, remedy?, base_commit?, base_actual?,
 ratchet_skipped? }`; `unit` ∈ `tokens` | `lines`, `tier` ∈ `over` | `headroom` (no `remedy`). It is `warn`;
 under `knowledge.size_ratchet`, an over-budget L1/L2 unit larger than at merge-base `base_commit`
-(`base_actual`, `null` = absent) is `fail`, `ratchet_skipped` says why it went uncompared, and an
-unresolvable ratchet is a `fail` on `.prospec.yaml`.
+(`base_actual`, `null` = absent) is `fail`, `ratchet_skipped` says why it went uncompared (its merge-base
+path is through a gitlink or symlink, or not a regular file), and an unresolvable ratchet is a `fail` on
+`.prospec.yaml` naming the fix for its cause.
 
 ## `structural.knowledge_health` (optional) — module freshness + coverage
 
@@ -124,7 +125,7 @@ unresolvable ratchet is a `fail` on `.prospec.yaml`.
 - `severity` ∈ `MUST` | `SHOULD` | `MAY` | `null`. `null` = no RFC-2119 tag — **never** defaulted;
   `constitution-severity` warns on it.
 - When the inventory has rules but **no project-authored** principle (only the seeded examples +
-  Language Policy remain), `constitution-severity` warns with one
+  Language Policy remain after subtracting the starter set), `constitution-severity` warns with one
   whole-document finding (no `line`): nothing real to grade.
 - `prospec-verify` 3/5 audits against this list: a statement for each rule with no `check:`, a `covers:` gap, or a not-adjudicated check, taking each
   severity from here and filling machine verdicts from declared `check_id`s, not re-reading the file — so no rule is skipped or reassigned. Judging a
