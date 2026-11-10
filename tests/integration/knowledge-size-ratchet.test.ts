@@ -7,6 +7,7 @@ import { collectKnowledgeSize, type KnowledgeSizeSource } from '../../src/lib/dr
 import { evaluateKnowledgeSize } from '../../src/lib/drift-checker.js';
 import { execute as check } from '../../src/services/check.service.js';
 import { DEFAULT_KNOWLEDGE_TOKEN_BUDGET, type KnowledgeSizeBudget } from '../../src/types/config.js';
+import { gitIn } from '../helpers/git-fixture.js';
 
 // Real git per test — the house timeout for git-bound suites (PB-010).
 vi.setConfig({ testTimeout: 30_000 });
@@ -22,8 +23,9 @@ const README = 'prospec/ai-knowledge/modules/x/README.md';
 
 let root: string;
 let project: string;
-const git = (cwd: string, ...args: string[]): string =>
-  execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8' });
+// The shared fixture pins identity and disables commit signing and background
+// maintenance, so a host-wide `commit.gpgsign=true` cannot fail or stall a commit here.
+const git = (cwd: string, ...args: string[]): string => gitIn(cwd, ...args);
 const write = (rel: string, text: string): void => {
   mkdirSync(path.dirname(path.join(project, rel)), { recursive: true });
   writeFileSync(path.join(project, rel), text);
@@ -38,8 +40,6 @@ function initRepo(projectSubdir = ''): void {
   root = mkdtempSync(path.join(os.tmpdir(), 'size-ratchet-'));
   project = path.join(root, projectSubdir);
   git(root, 'init', '-q', '-b', 'main');
-  git(root, 'config', 'user.name', 'test');
-  git(root, 'config', 'user.email', 'test@example.com');
   git(root, 'config', 'core.autocrlf', 'false');
   // `git init` derives this from the filesystem (true on macOS, false on Linux); pin it
   // so every case below takes the same branch on every platform.
@@ -70,6 +70,26 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, README)!.severity).toBe('warn');
   });
 
+  // `ls-tree` prints only the deepest ancestor that exists, so a new file beside an unchanged
+  // one has a regular directory (040000) in its ancestor listing: only a gitlink or symlink
+  // ancestor may skip the file, never an ancestor that merely exists.
+  it('fails a new file under a directory that exists at the merge-base', () => {
+    const rel = 'prospec/ai-knowledge/modules/x/NEW.md';
+    write(rel, `${'B'.repeat(399)}\n`);
+    const src = collect({ base: 'base' });
+    expect(itemAt(src, rel).ratchet).toEqual({ base: null });
+    expect(findingAt(src, rel)).toMatchObject({ severity: 'fail' });
+  });
+
+  it('fails a renamed file as absent at the merge-base, without calling it grown', () => {
+    git(root, 'mv', 'prospec/ai-knowledge/modules/x', 'prospec/ai-knowledge/modules/renamed');
+    const rel = 'prospec/ai-knowledge/modules/renamed/README.md';
+    const finding = findingAt(collect({ base: 'base' }), rel)!;
+    expect(finding).toMatchObject({ severity: 'fail', knowledge_size: { base_actual: null } });
+    expect(finding.detail).toContain('absent at merge-base');
+    expect(finding.detail).not.toMatch(/grew/);
+  });
+
   it('fails a file that grew past its merge-base size, and returns to warn once it shrinks back', () => {
     write(README, `${'A'.repeat(399)}\n${'B'.repeat(40)}\n`);
     expect(findingAt(collect({ base: 'base' }), README)).toMatchObject({ severity: 'fail' });
@@ -77,7 +97,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(collect({ base: 'base' }), README)).toMatchObject({ severity: 'warn' });
   });
 
-  // R-8 pin: an L2 file within its token budget is a ratchet target on its line count alone.
+  // An L2 file within its token budget is a ratchet target on its line count alone.
   it('fails an L2 file whose line count grew past the line budget while its tokens stay in budget', () => {
     write(README, '\n'.repeat(120)); // 120 lines → 30 tokens, over readme_max_lines only
     git(root, 'commit', '-qam', 'long readme');
@@ -100,17 +120,78 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, 'prospec/ai-knowledge/modules/y/README.md')).toMatchObject({ severity: 'fail' });
   });
 
-  it('reads the base through the checkout filters, so a CRLF working tree is not growth', () => {
+  // Line endings never decide growth: both texts are compared with every carriage return
+  // removed, whichever way `core.autocrlf` converts them.
+  describe('line endings', () => {
     const lines = Array.from({ length: 40 }, (_, i) => `line ${i} ${'A'.repeat(6)}`);
-    write(README, `${lines.join('\n')}\n`);
-    git(root, 'commit', '-qam', 'multi-line readme');
-    git(root, 'branch', '-f', 'base');
-    git(root, 'config', 'core.autocrlf', 'true');
-    write(README, `${lines.join('\r\n')}\r\n`);
-    const src = collect({ base: 'base' });
-    const item = itemAt(src, README);
-    expect(item.ratchet).toEqual({ base: { tokens: item.tokens, lines: item.lines } });
-    expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+    const commitLfBase = (): void => {
+      write(README, `${lines.join('\n')}\n`);
+      git(root, 'commit', '-qam', 'multi-line readme');
+      git(root, 'branch', '-f', 'base');
+    };
+
+    it('compares an unchanged CRLF working tree under core.autocrlf=true with its LF content', () => {
+      commitLfBase();
+      git(root, 'config', 'core.autocrlf', 'true');
+      write(README, `${lines.join('\r\n')}\r\n`);
+      const src = collect({ base: 'base' });
+      const item = itemAt(src, README);
+      expect(item.lf_measure).toBeDefined();
+      expect(item.ratchet).toEqual({ base: item.lf_measure });
+      expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+    });
+
+    it('keeps an unchanged file saved with CRLF under core.autocrlf=input a warn', () => {
+      commitLfBase();
+      git(root, 'config', 'core.autocrlf', 'input');
+      write(README, `${lines.join('\r\n')}\r\n`);
+      // content-identical to the commit: only the line endings differ on disk
+      expect(git(root, 'diff')).toBe('');
+      expect(findingAt(collect({ base: 'base' }), README)).toMatchObject({ severity: 'warn' });
+    });
+
+    it('fails an LF file that grew under core.autocrlf=true, whose base checks out with CRLF', () => {
+      commitLfBase();
+      git(root, 'config', 'core.autocrlf', 'true');
+      write(README, `${[...lines, 'B'.repeat(30)].join('\n')}\n`);
+      expect(findingAt(collect({ base: 'base' }), README)).toMatchObject({ severity: 'fail' });
+    });
+
+    // Over budget only by its carriage returns: the same content checked out with LF has no
+    // finding at all, so the ratchet may not fail it under CRLF either.
+    it('does not fail a file that is over budget only by its carriage returns', () => {
+      const short = Array.from({ length: 20 }, () => 'A'.repeat(8));
+      write(README, `${short.join('\n')}\n`); // 180 chars → 45 tokens
+      git(root, 'commit', '-qam', 'readme within budget');
+      git(root, 'branch', '-f', 'base');
+      git(root, 'config', 'core.autocrlf', 'true');
+      const grown = [...short, 'A'.repeat(8), 'A'.repeat(8)];
+      write(README, `${grown.join('\r\n')}\r\n`); // 50 tokens without CR (= budget), 55 with
+      const finding = findingAt(collect({ base: 'base' }), README)!;
+      expect(finding.severity).toBe('warn');
+      expect(finding.knowledge_size).toMatchObject({ actual: 55, base_actual: 45 });
+    });
+
+    it('names the carriage-return-free size it compared when a CRLF file grew', () => {
+      commitLfBase();
+      git(root, 'config', 'core.autocrlf', 'true');
+      const grownLines = [...lines, 'B'.repeat(30)];
+      write(README, `${grownLines.join('\r\n')}\r\n`);
+      const finding = findingAt(collect({ base: 'base' }), README)!;
+      const lf = Math.ceil(`${grownLines.join('\n')}\n`.length / 4);
+      expect(finding.severity).toBe('fail');
+      expect(finding.detail).toContain(`${lf} tokens without carriage returns`);
+    });
+
+    it('reports the unnormalized size as `actual`, ratchet or not', () => {
+      commitLfBase();
+      git(root, 'config', 'core.autocrlf', 'true');
+      const crlf = `${lines.join('\r\n')}\r\n`;
+      write(README, crlf);
+      const raw = Math.ceil(crlf.length / 4);
+      expect(findingAt(collect(undefined), README)!.knowledge_size).toMatchObject({ actual: raw });
+      expect(findingAt(collect({ base: 'base' }), README)!.knowledge_size).toMatchObject({ actual: raw });
+    });
   });
 
   it.skipIf(process.platform === 'win32')('does not ratchet a symlinked knowledge file', () => {
@@ -124,7 +205,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, 'prospec/ai-knowledge/modules/z/README.md')).toMatchObject({ severity: 'warn' });
   });
 
-  it('never ratchet-measures a growing over-budget Feature Spec (R-2)', () => {
+  it('never ratchet-measures a growing over-budget Feature Spec', () => {
     write('prospec/specs/features/a.md', 'F'.repeat(400));
     git(root, 'add', '.');
     git(root, 'commit', '-qm', 'spec');
@@ -135,7 +216,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, 'prospec/specs/features/a.md')).toMatchObject({ severity: 'warn' });
   });
 
-  it.skipIf(process.platform === 'win32')('skips a file that is a symlink only in the working tree (R-3)', () => {
+  it.skipIf(process.platform === 'win32')('skips a file that is a symlink only in the working tree', () => {
     write('prospec/ai-knowledge/w-target.md', 'G'.repeat(800));
     rmSync(path.join(project, README));
     symlinkSync('../../w-target.md', path.join(project, README));
@@ -144,7 +225,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
   });
 
-  it.skipIf(process.platform === 'win32')('skips a file that was a symlink only at the merge-base (R-3)', () => {
+  it.skipIf(process.platform === 'win32')('skips a file that was a symlink only at the merge-base', () => {
     write('prospec/ai-knowledge/m-target.md', 'H'.repeat(400));
     rmSync(path.join(project, README));
     symlinkSync('../../m-target.md', path.join(project, README));
@@ -158,7 +239,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
   });
 
-  // R-1 pin: the symlink sits on a parent directory, not on the file. ls-tree cannot
+  // The symlink sits on a parent directory, not on the file. ls-tree cannot
   // list a path through a symlink, so a leaf-only check read it as absent → false FAIL.
   it.skipIf(process.platform === 'win32')('does not ratchet a file reached through a symlinked parent directory', () => {
     write('prospec/ai-knowledge/shared/lib/README.md', 'E'.repeat(400));
@@ -172,7 +253,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, rel)).toMatchObject({ severity: 'warn' });
   });
 
-  // PR #406 review P1: a path the merge-base tree cannot list because an ancestor is a
+  // A path the merge-base tree cannot list because an ancestor is a
   // link there is not new debt — the content was behind the link.
   it.skipIf(process.platform === 'win32')('skips a file whose parent directory was a symlink at the merge-base and is a real directory now', () => {
     write('prospec/ai-knowledge/real/README.md', 'A'.repeat(400));
@@ -240,7 +321,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
     expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
   });
 
-  // PR #406 review P2: a case-only directory rename on a case-insensitive repository is
+  // A case-only directory rename on a case-insensitive repository is
   // looked up under the index's own spelling. `core.ignorecase` is set explicitly, so the
   // case runs on a case-sensitive filesystem (Linux CI) as well.
   describe('with core.ignorecase', () => {
@@ -266,6 +347,29 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
       const src = collect({ base: 'base' });
       expect(itemAt(src, README).ratchet).toMatchObject({ skipped: expect.stringContaining('more than one index path') });
       expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+    });
+
+    // The case-insensitive index read honours the caller's repository selection like every
+    // other ratchet read: with the git directory outside the work tree, a read that drops
+    // GIT_DIR / GIT_WORK_TREE finds no repository and the whole ratchet goes unresolvable.
+    it('reads the index of a repository selected through GIT_DIR and GIT_WORK_TREE', () => {
+      git(root, 'config', 'core.ignorecase', 'true');
+      const gitDir = `${root}-gitdir`;
+      renameSync(path.join(root, '.git'), gitDir);
+      renameDir('x', 'X');
+      const rel = 'prospec/ai-knowledge/modules/X/README.md';
+      process.env.GIT_DIR = gitDir;
+      process.env.GIT_WORK_TREE = root;
+      try {
+        const src = collect({ base: 'base' });
+        expect(src.ratchet).toMatchObject({ status: 'resolved' });
+        expect(itemAt(src, rel).ratchet).toEqual({ base: { tokens: 100, lines: 1 } });
+        expect(findingAt(src, rel)).toMatchObject({ severity: 'warn' });
+      } finally {
+        delete process.env.GIT_DIR;
+        delete process.env.GIT_WORK_TREE;
+        rmSync(gitDir, { recursive: true, force: true });
+      }
     });
 
     it('keeps the exact-case lookup when core.ignorecase is false', () => {
@@ -322,7 +426,7 @@ describe('collectKnowledgeSize — project below the repository root', () => {
     expect(findingAt(src, README)).toMatchObject({ severity: 'fail' });
   });
 
-  // Review R-9 pin: the project directory is a real directory at the merge-base, so a
+  // The project directory is a real directory at the merge-base, so a
   // file absent there is new debt — the project-directory lookup must not skip it.
   it('fails a committed file that is new since the merge-base', () => {
     write('prospec/ai-knowledge/modules/y/README.md', 'C'.repeat(400));
@@ -335,7 +439,7 @@ describe('collectKnowledgeSize — project below the repository root', () => {
   });
 });
 
-// Review R-1 pin: the link sits on the project directory or above it, so no
+// The link sits on the project directory or above it, so no
 // project-relative ancestor names it — the lookup must reach past the project prefix.
 describe('collectKnowledgeSize — a link at the merge-base on the project directory or above it', () => {
   afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -368,7 +472,7 @@ describe('collectKnowledgeSize — a link at the merge-base on the project direc
     linkAtBase(projectSubdir, link, mode, kind);
   });
 
-  // Review R-1 (round 2) pin: a repository directory name is a path, never pathspec
+  // A repository directory name is a path, never pathspec
   // magic — `:outer` would otherwise match `outer`, and `:!x` would fail the listing.
   it.skipIf(process.platform === 'win32').each([
     ['a magic-looking name', ':outer/sub', ':outer'],
@@ -378,7 +482,7 @@ describe('collectKnowledgeSize — a link at the merge-base on the project direc
   });
 });
 
-// Review R-1 (round 3) pin: `:(literal)` is itself read literally under an inherited
+// `:(literal)` is itself read literally under an inherited
 // GIT_LITERAL_PATHSPECS=1 (a hook run by `git --literal-pathspecs commit`), so the
 // ratchet's reads must not inherit the pathspec-mode variables.
 describe('collectKnowledgeSize — under an inherited GIT_LITERAL_PATHSPECS=1', () => {
@@ -402,6 +506,18 @@ describe('collectKnowledgeSize — under an inherited GIT_LITERAL_PATHSPECS=1', 
     expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
   });
 
+  it('still resolves a case-only directory rename through the case-insensitive index lookup', () => {
+    initRepo();
+    git(root, 'config', 'core.ignorecase', 'true');
+    const dir = path.join(project, 'prospec/ai-knowledge/modules');
+    renameSync(path.join(dir, 'x'), path.join(dir, 'x.tmp'));
+    renameSync(path.join(dir, 'x.tmp'), path.join(dir, 'X'));
+    const rel = 'prospec/ai-knowledge/modules/X/README.md';
+    const src = collectLiteral({ base: 'base' });
+    expect(itemAt(src, rel).ratchet).toEqual({ base: { tokens: 100, lines: 1 } });
+    expect(findingAt(src, rel)).toMatchObject({ severity: 'warn' });
+  });
+
   it('still finds a project directory that was a symlink at the merge-base', () => {
     initRepo('sub');
     git(root, 'rm', '-rq', '--cached', 'sub');
@@ -418,7 +534,7 @@ describe('collectKnowledgeSize — under an inherited GIT_LITERAL_PATHSPECS=1', 
   });
 });
 
-// Review R-1 (round 2) pin: a knowledge path inside the project is a literal pathspec
+// A knowledge path inside the project is a literal pathspec
 // too, so a base directory spelled like magic is still found at the merge-base.
 describe('collectKnowledgeSize — a knowledge directory spelled like pathspec magic', () => {
   beforeEach(() => initRepo());

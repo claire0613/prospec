@@ -9,7 +9,7 @@ import { inventoryFileSource } from './project-files-adapters.js';
 import { probeGitWorkTree } from './git-prerequisite.js';
 import { parseYaml } from './yaml-utils.js';
 import { parseDocument, isMap, isScalar } from 'yaml';
-import { DEFAULT_BASE_DIR, DEFAULT_KNOWLEDGE_TOKEN_BUDGET, KNOWLEDGE_SIZE_RULES, isShippedBudgetField, type ShippedBudgetField } from '../types/config.js';
+import { DEFAULT_BASE_DIR, DEFAULT_KNOWLEDGE_TOKEN_BUDGET, KNOWLEDGE_SIZE_RULES, isShippedBudgetField, overBudgetUnits, type ShippedBudgetField } from '../types/config.js';
 import { withoutFencedBlocks } from './markdown-fences.js';
 import { GIT_READ_TIMEOUT_MS, PATHSPEC_ENV, gitRead, gitReadOptional, gitReadRecords, fixedGitEnv, hiddenIndexShape, parseIndexRecord, readIndexEntries } from './git-read.js';
 import { moduleSourceDigest, type SourceDigestEntry } from './source-digest.js';
@@ -71,7 +71,7 @@ import type { InputSnapshot, TestInputState, EvidenceStates, SourceInventory } f
 import { resolveTestEvidencePolicy } from './config.js';
 import { nonDirectoryAncestor, type AncestorKind } from './fs-utils.js';
 import { AGENT_CONFIGS, SKILL_DEFINITIONS } from '../types/skill.js';
-import type { KnowledgeSizeBudget, KnowledgeSizeKind, KnowledgeSizeRule, ProspecConfig } from '../types/config.js';
+import type { KnowledgeSizeBudget, KnowledgeSizeKind, ProspecConfig } from '../types/config.js';
 import { CANONICAL_INIT_DOCS } from '../types/conventions.js';
 
 /**
@@ -210,6 +210,10 @@ export interface KnowledgeSizeItem {
   /** present only while `knowledge.size_ratchet` is resolved, and only for an
    *  over-budget item whose kind the ratchet governs */
   ratchet?: KnowledgeSizeItemRatchet;
+  /** the file measured with every carriage return removed — present only when its text
+   *  holds one. The ratchet compares this with the equally normalized merge-base text, so
+   *  line endings never decide growth; `tokens`/`lines` stay the reported measurement. */
+  lf_measure?: { tokens: number; lines: number };
 }
 
 /** Why a configured ratchet could not be resolved — the evaluator picks the fix from it:
@@ -995,11 +999,13 @@ export function collectKnowledgeSize(
   const items: KnowledgeSizeItem[] = [];
   const measure = (relPath: string, kind: KnowledgeSizeKind, content: string | null): void => {
     if (content === null) return;
+    const lf = content.includes('\r') ? content.replace(/\r/g, '') : null;
     items.push({
       source_path: relPath.replace(/\\/g, '/'),
       kind,
       tokens: estimateTokens(content),
       lines: countLines(content),
+      ...(lf === null ? {} : { lf_measure: { tokens: estimateTokens(lf), lines: countLines(lf) } }),
     });
   };
 
@@ -1064,11 +1070,6 @@ export function collectKnowledgeSize(
   return { available: true, budget, items, ratchet: applySizeRatchet(cwd, ratchet, inWorkTree, items, budget) };
 }
 
-/** Upper bound on one ratchet git read — the bound `git-read` uses. `cat-file
- *  --filters` runs smudge drivers (git-lfs can reach the network), and a hung read
- *  must fail the check closed rather than hang it. */
-const RATCHET_GIT_TIMEOUT_MS = 30_000;
-
 /** The only tree-entry modes whose blob is the file's own text. A symlink (120000)
  *  stores its target, a tree (040000) or a gitlink (160000) is not a file at all —
  *  `cat-file --filters` would print the tree or the commit object, not the content. */
@@ -1091,9 +1092,11 @@ function ratchetBaseRef(value: unknown): { base: string } | { reason: string; ba
   return { base };
 }
 
+/** Whether any unit of the item (its raw measurement — the one its finding reports) is
+ *  over budget, by the same predicate the evaluator grades with. */
 function overAnyBudget(item: KnowledgeSizeItem, budget: KnowledgeSizeBudget): boolean {
-  const rule: KnowledgeSizeRule = KNOWLEDGE_SIZE_RULES[item.kind];
-  return item.tokens > budget[rule.tokenKey] || (rule.lineKey !== undefined && item.lines > budget[rule.lineKey]);
+  const over = overBudgetUnits(item.kind, budget, item);
+  return over.tokens || over.lines;
 }
 
 /** Whether the file or ANY directory between `cwd` and it is a symlink. git stores a
@@ -1134,13 +1137,11 @@ function treeModes(listing: string): Map<string, string> {
  * (untracked) keeps the working-tree path. Returns null when the index read fails.
  */
 function indexPathsIgnoringCase(cwd: string, paths: string[]): Map<string, string | { ambiguous: true }> | null {
-  let records: string[];
-  try {
-    // git-read's fixed env drops GIT_*_PATHSPECS, which would silently reinterpret the magic.
-    records = gitReadRecords(cwd, 'ls-files', ['-z', '--', ...paths.map((p) => `:(icase,literal)${p}`)]);
-  } catch {
-    return null;
-  }
+  // listPathspecs reads through readIndexEntries, which clears only the pathspec-mode
+  // variables (GIT_*_PATHSPECS would silently reinterpret the magic) and keeps the caller's
+  // repository selection (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE) like every other ratchet read.
+  const records = listPathspecs(cwd, paths.map((p) => `:(icase,literal)${p}`));
+  if (records === null) return null;
   const byFolded = new Map<string, Set<string>>();
   for (const record of records) {
     const folded = record.toLowerCase();
@@ -1201,7 +1202,10 @@ function applySizeRatchet(
     if (!inWorkTree) return unresolvable('environment', 'not a git work tree');
     // gitCapture drops an inherited GIT_LITERAL_PATHSPECS=1, which would read the `:(literal)`
     // prefix below as part of the file name: every lookup would match nothing and fail unchanged files.
-    const capture = (args: string[]): string | null => gitCapture(cwd, args, RATCHET_GIT_TIMEOUT_MS);
+    // Every ratchet git read is bounded by git-read's timeout: `cat-file --filters` runs
+    // smudge drivers (git-lfs can reach the network), and a hung read must fail the check
+    // closed rather than hang it.
+    const capture = (args: string[]): string | null => gitCapture(cwd, args, GIT_READ_TIMEOUT_MS);
     // Unlike collectGitTimestamps' best-effort probe, a failed probe is not "not
     // shallow" here: a gate cannot assume the history it compares against.
     const shallow = capture(['rev-parse', '--is-shallow-repository'])?.trim();
@@ -1259,7 +1263,7 @@ function applySizeRatchet(
         ancestorModes = treeModes(ancestorListing);
         let prefix: string;
         try {
-          prefix = gitProjectPrefix(cwd).replace(/\/$/, '');
+          prefix = gitProjectPrefix(cwd, { timeout: GIT_READ_TIMEOUT_MS }).replace(/\/$/, '');
         } catch {
           return unresolvable('environment', 'the project prefix probe (`git rev-parse --show-prefix`) failed');
         }
@@ -1291,13 +1295,15 @@ function applySizeRatchet(
         } else if (!REGULAR_BLOB_MODES.has(mode)) {
           measured.set(item, { skipped: `not a regular file at the merge-base (mode ${mode})` });
         } else {
-          // --filters applies the same eol/smudge conversion as a checkout, so a CRLF
-          // working tree is compared like for like with its LF blob.
+          // --filters applies a checkout's smudge conversion (git-lfs and the like); carriage
+          // returns are then removed on both sides, so neither core.autocrlf direction reads
+          // an unchanged file as grown or hides real growth behind its line endings.
           const blob = capture(['cat-file', '--filters', `${mergeBase}:./${lookup}`]);
           if (blob === null) {
             return unresolvable('environment', `could not read ${item.source_path} ${at} (failed or timed out)`);
           }
-          measured.set(item, { base: { tokens: estimateTokens(blob), lines: countLines(blob) } });
+          const lf = blob.replace(/\r/g, '');
+          measured.set(item, { base: { tokens: estimateTokens(lf), lines: countLines(lf) } });
         }
       }
     }
@@ -2274,10 +2280,15 @@ function firstUnrepresented(dir: string, represented: ReadonlySet<string>): stri
 /** Porcelain v1 always emits repository-root paths; ls-files is cwd-relative.
  * Ordinary root projects need no extra subprocess. Nested/external-worktree
  * setups ask Git for the exact prefix, preserving embedded whitespace bytes.
+ * `options.timeout` bounds that probe; only the knowledge-size ratchet passes one.
  */
-export function gitProjectPrefix(cwd: string): string {
+export function gitProjectPrefix(cwd: string, options: { timeout?: number } = {}): string {
   if (existsSync(path.join(cwd, '.git')) && !process.env.GIT_DIR && !process.env.GIT_WORK_TREE) return '';
-  const raw = execFileSync('git', ['rev-parse', '--show-prefix'], { cwd, stdio: 'pipe' });
+  const raw = execFileSync('git', ['rev-parse', '--show-prefix'], {
+    cwd,
+    stdio: 'pipe',
+    ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+  });
   const text = raw.toString('utf8');
   if (!Buffer.from(text).equals(raw) || !text.endsWith('\n')) throw new Error('Git project prefix cannot be represented losslessly');
   return text.slice(0, -1);

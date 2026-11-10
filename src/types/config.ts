@@ -210,6 +210,25 @@ export const KNOWLEDGE_SIZE_RULES = {
   },
 } satisfies Record<KnowledgeSizeKind, KnowledgeSizeRule>;
 
+/**
+ * Which budget units a measured file exceeds — the ONE over-budget test, shared by the
+ * knowledge-size ratchet (which picks its merge-base targets with it) and the evaluator
+ * (which grades with it), so the two can never disagree about which units are over and
+ * leave a ratchet-governed unit graded without its merge-base fact. Lines are graded only
+ * where the kind's rule declares a `lineKey`.
+ */
+export function overBudgetUnits(
+  kind: KnowledgeSizeKind,
+  budget: KnowledgeSizeBudget,
+  size: { tokens: number; lines: number },
+): { tokens: boolean; lines: boolean } {
+  const rule: KnowledgeSizeRule = KNOWLEDGE_SIZE_RULES[kind];
+  return {
+    tokens: size.tokens > budget[rule.tokenKey],
+    lines: rule.lineKey !== undefined && size.lines > budget[rule.lineKey],
+  };
+}
+
 const KnowledgeSchema = z.object({
   base_path: z.string().optional(),
   additional_core_conventions: z.array(z.string()).optional(),

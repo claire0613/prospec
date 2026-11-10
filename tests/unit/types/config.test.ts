@@ -11,9 +11,26 @@ import {
   isNormalizedProjectPath,
   isShippedBudgetField,
   knowledgeBasePathIssue,
+  overBudgetUnits,
   type KnowledgeSizeRule,
 } from '../../../src/types/config.js';
 import { TestPolicySchema } from '../../../src/types/change.js';
+
+describe('overBudgetUnits — the one over-budget predicate the ratchet collector and the evaluator share (REQ-LIB-111)', () => {
+  const budget = { ...DEFAULT_KNOWLEDGE_TOKEN_BUDGET, l2_per_module: 100, readme_max_lines: 10, l1_per_file: 100 };
+
+  it('grades tokens and lines independently against the kind\'s own budget keys', () => {
+    expect(overBudgetUnits('l2', budget, { tokens: 101, lines: 10 })).toEqual({ tokens: true, lines: false });
+    expect(overBudgetUnits('l2', budget, { tokens: 100, lines: 11 })).toEqual({ tokens: false, lines: true });
+    expect(overBudgetUnits('l2', budget, { tokens: 100, lines: 10 })).toEqual({ tokens: false, lines: false });
+  });
+
+  it('never grades lines for a kind whose rule declares no lineKey', () => {
+    expect((KNOWLEDGE_SIZE_RULES.l1 as KnowledgeSizeRule).lineKey).toBeUndefined();
+    expect(overBudgetUnits('l1', budget, { tokens: 100, lines: 10_000 })).toEqual({ tokens: false, lines: false });
+    expect(overBudgetUnits('l1', budget, { tokens: 101, lines: 0 })).toEqual({ tokens: true, lines: false });
+  });
+});
 
 describe('DEFAULT_KNOWLEDGE_TOKEN_BUDGET', () => {
   it('is the single source for the knowledge-size thresholds', () => {

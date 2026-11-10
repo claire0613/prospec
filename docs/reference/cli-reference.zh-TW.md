@@ -598,7 +598,7 @@ Review、`implemented`、`test-provenance` 與 verify 共用測試閘門。通�
 
 #### 調整 `knowledge-size` 預算
 
-`knowledge-size` 回報超標檔案為 WARN，不影響 `--strict` 的 exit code。設定 `knowledge.size_ratchet` 後，已超標且比 merge-base 時更大的 L1/L2 檔為 FAIL，`--strict` 會以非零結束。各載入面的預設值、`knowledge.token_budget` 欄位、ratchet 對 git 歷史的要求、固定的 skill／reference 預算，以及各類超標檔案的處理方式，見[設定參考](./configuration.zh-TW.md#knowledge-預算)。
+`knowledge-size` 回報超標檔案為 WARN，不影響 `--strict` 的 exit code。設定 `knowledge.size_ratchet` 後，已超標且比 merge-base 時更大、或在 merge-base 不存在的 L1/L2 檔為 FAIL，`--strict` 會以非零結束；行尾差異不算成長。各載入面的預設值、`knowledge.token_budget` 欄位、ratchet 對 git 歷史的要求、固定的 skill／reference 預算，以及各類超標檔案的處理方式，見[設定參考](./configuration.zh-TW.md#knowledge-預算)。
 
 <details>
 <summary>隨選變異測試（Mutation Testing）</summary>

@@ -10,6 +10,7 @@ import {
   computeChangeDigest,
   changedPathsFromWorkTree,
 } from '../../../src/lib/drift-sources.js';
+import { evaluateKnowledgeSize } from '../../../src/lib/drift-checker.js';
 import { DEFAULT_KNOWLEDGE_TOKEN_BUDGET } from '../../../src/types/config.js';
 import type { ModuleMap } from '../../../src/types/module-map.js';
 
@@ -30,6 +31,7 @@ const state = vi.hoisted(() => ({
   failShallowProbe: false,
   timeoutCatFile: false,
   catFileTimeouts: [] as unknown[],
+  showPrefixTimeouts: [] as unknown[],
   failLsTree: false,
   failAncestorLsTree: false,
   failIgnoreCaseProbe: false,
@@ -52,8 +54,9 @@ vi.mock('node:child_process', async (importOriginal) => {
         if (state.failAncestorLsTree && state.lsTreeCalls === 2) throw new Error('simulated ancestor ls-tree failure');
         if (state.failFullTreeLsTree && args.includes('--full-tree')) throw new Error('simulated project-directory ls-tree failure');
       }
-      if (state.failShowPrefix && Array.isArray(args) && args.includes('--show-prefix')) {
-        throw new Error('simulated show-prefix failure');
+      if (Array.isArray(args) && args.includes('--show-prefix')) {
+        state.showPrefixTimeouts.push((opts as { timeout?: unknown } | undefined)?.timeout);
+        if (state.failShowPrefix) throw new Error('simulated show-prefix failure');
       }
       if (state.failIgnoreCaseProbe && Array.isArray(args) && args.includes('core.ignorecase')) {
         throw new Error('simulated core.ignorecase probe failure');
@@ -215,6 +218,7 @@ describe('collectKnowledgeSize ratchet under selective git-capture failure', () 
     state.failShallowProbe = false;
     state.timeoutCatFile = false;
     state.catFileTimeouts = [];
+    state.showPrefixTimeouts = [];
     state.failLsFiles = false;
     state.failLsTree = false;
     state.failAncestorLsTree = false;
@@ -313,6 +317,42 @@ describe('collectKnowledgeSize ratchet under selective git-capture failure', () 
     const src = collectBelowRoot();
     expect(src.ratchet).toMatchObject({ status: 'unresolvable', cause: 'environment', reason: expect.stringContaining(mentions) });
     expect(src.items.every((i) => i.ratchet === undefined)).toBe(true);
+  });
+
+  it('bounds the project prefix probe by the same 30-second git timeout', () => {
+    expect(collectBelowRoot().ratchet).toMatchObject({ status: 'resolved' });
+    expect(state.showPrefixTimeouts).toEqual([30_000]);
+  });
+
+  // The collector's cause decides the fix the evaluator names; a cause test built by hand
+  // in the evaluator cannot see a collector that files a cause under the wrong class.
+  const fixFor = (src: ReturnType<typeof collectKnowledgeSize>): string => {
+    const finding = evaluateKnowledgeSize(src).findings.find((f) => f.source_path === '.prospec.yaml');
+    expect(finding).toMatchObject({ severity: 'fail' });
+    return finding!.detail;
+  };
+
+  it('files a shallow clone under `history`, whose fix names full history and not the base', () => {
+    const shallow = mkdtempSync(path.join(os.tmpdir(), 'size-ratchet-shallow-'));
+    try {
+      execFileSync('git', ['clone', '-q', '--depth', '1', `file://${tmpDir}`, shallow], { stdio: 'pipe' });
+      const src = collectKnowledgeSize(shallow, path.join(shallow, 'prospec'), path.join(shallow, 'prospec/ai-knowledge'), budget, [], { base: 'HEAD' }, true);
+      expect(src.ratchet).toMatchObject({ status: 'unresolvable', cause: 'history' });
+      const detail = fixFor(src);
+      expect(detail).toContain('fetch-depth: 0');
+      expect(detail).not.toContain('correct `knowledge.size_ratchet.base`');
+    } finally {
+      rmSync(shallow, { recursive: true, force: true });
+    }
+  });
+
+  it('files a base with no merge-base under `ref`, whose fix names the base, full history and a re-run', () => {
+    const src = collect({ base: 'no-such-ref' });
+    expect(src.ratchet).toMatchObject({ status: 'unresolvable', cause: 'ref' });
+    const detail = fixFor(src);
+    expect(detail).toContain('correct `knowledge.size_ratchet.base`');
+    expect(detail).toContain('fetch-depth: 0');
+    expect(detail).toContain('re-run');
   });
 
   it('does not probe core.ignorecase when no item is over budget', () => {

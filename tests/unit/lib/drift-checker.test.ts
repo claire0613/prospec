@@ -57,6 +57,7 @@ import { whenThenBullets } from '../../../src/lib/landing-fidelity.js';
 import {
   KNOWLEDGE_SIZE_KINDS,
   KNOWLEDGE_SIZE_RULES,
+  overBudgetUnits,
   type KnowledgeSizeBudget,
   type KnowledgeSizeKind,
 } from '../../../src/types/config.js';
@@ -431,6 +432,24 @@ describe('evaluateKnowledgeSize — size ratchet (REQ-LIB-111)', () => {
     expect(only(ratcheted).detail).toBe(only(plain).detail);
   });
 
+  // The evaluator grades with the same `overBudgetUnits` predicate the ratchet picks its
+  // merge-base targets with, so a unit exactly at its budget is neither graded nor targeted,
+  // and one unit over is both — the two can never leave a ratchet-governed unit ungraded.
+  it.each([
+    ['tokens', { tokens: 1500, lines: 60 }, { tokens: 1501, lines: 60 }],
+    ['lines', { tokens: 100, lines: 100 }, { tokens: 100, lines: 101 }],
+  ] as const)('grades %s exactly where overBudgetUnits says the unit is over', (unit, atBudget, overBudget) => {
+    const kind = unit === 'lines' ? ('l2' as const) : ('l1' as const);
+    const budget = { ...SIZE_BUDGET, l2_per_module: 1500, readme_max_lines: 100 };
+    const findingsFor = (size: { tokens: number; lines: number }) =>
+      evaluateKnowledgeSize({ ...sizeSrc([{ source_path: README, kind, ...size }]), budget }).findings
+        .filter((f) => f.knowledge_size?.tier === 'over' && f.knowledge_size.unit === unit);
+    expect(overBudgetUnits(kind, budget, atBudget)[unit]).toBe(false);
+    expect(findingsFor(atBudget)).toHaveLength(0);
+    expect(overBudgetUnits(kind, budget, overBudget)[unit]).toBe(true);
+    expect(findingsFor(overBudget)).toHaveLength(1);
+  });
+
   it('fails a file absent at the merge-base, recording base_actual null', () => {
     const r = evaluateKnowledgeSize(resolved([
       { source_path: README, kind: 'l2', tokens: 500, lines: 40, ratchet: { base: null } },
@@ -438,6 +457,27 @@ describe('evaluateKnowledgeSize — size ratchet (REQ-LIB-111)', () => {
     const f = only(r);
     expect(f.severity).toBe('fail');
     expect(f.knowledge_size).toMatchObject({ base_commit: SHA, base_actual: null });
+  });
+
+  // A path absent at the merge-base (new, or renamed) has no size to have grown from, so its
+  // detail says the path is absent there; only a path that existed reads as grown.
+  it('says a path absent at the merge-base is absent there, never that it grew', () => {
+    const f = only(evaluateKnowledgeSize(resolved([
+      { source_path: README, kind: 'l2', tokens: 500, lines: 40, ratchet: { base: null } },
+    ])));
+    expect(f.detail).toContain('absent at merge-base');
+    expect(f.detail).toContain(SHA.slice(0, 12));
+    expect(f.detail).toContain('500');
+    expect(f.detail).not.toMatch(/grew/);
+  });
+
+  it('keeps the grew-past detail, with the merge-base value, for a path that existed and grew', () => {
+    const f = only(evaluateKnowledgeSize(resolved([
+      { source_path: INDEX, kind: 'l1', tokens: 2715, lines: 60, ratchet: { base: { tokens: 2600, lines: 60 } } },
+    ])));
+    expect(f.detail).toContain('grew past its merge-base size');
+    expect(f.detail).toContain('2600 tokens at merge-base');
+    expect(f.detail).not.toContain('absent');
   });
 
   it('fails a file that was within budget at the merge-base and is over it now', () => {
@@ -474,7 +514,7 @@ describe('evaluateKnowledgeSize — size ratchet (REQ-LIB-111)', () => {
     ['reference', '.claude/skills/x/references/y.md'],
   ] as const)('never fails a growing %s file', (kind, source_path) => {
     // The item even carries a smaller merge-base size: only the rule's `ratchet`
-    // flag keeps it a warn (R-2 — a growth-free fixture proved nothing).
+    // flag keeps it a warn (a growth-free fixture would prove nothing).
     const r = evaluateKnowledgeSize(resolved([
       { source_path, kind, tokens: 9999, lines: 1, ratchet: { base: { tokens: 10, lines: 1 } } },
     ]));

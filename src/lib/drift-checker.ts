@@ -1,7 +1,7 @@
 import { isProvenanceAudited, FINGERPRINT_VERSION, EVIDENCE_SCOPE, TEST_FINGERPRINT_VERSION, TEST_EVIDENCE_SCOPE, TestPolicySchema, type TestEvidenceIdentity, type TestEvidenceReuse } from '../types/change.js';
 import type { TestEvidenceDecision, TestEvidenceFacts } from '../types/station.js';
 import { assessDrops } from './landing-fidelity.js';
-import { KNOWLEDGE_SIZE_RULES, type KnowledgeSizeBudget, type KnowledgeSizeRule } from '../types/config.js';
+import { KNOWLEDGE_SIZE_RULES, overBudgetUnits, type KnowledgeSizeBudget, type KnowledgeSizeRule } from '../types/config.js';
 import {
   DRIFT_CHECK_IDS,
   DRIFT_REPORT_FILENAME,
@@ -756,8 +756,9 @@ export function evaluateMetadataCompleteness(src: MetadataCompletenessSource): C
  * branches; only a surface whose rule declares a `lineKey` is graded on lines.
  * WARN-class by default: the progressive-loading budget is a pressure signal. With
  * `knowledge.size_ratchet` configured, an over-budget unit of a ratchet-governed
- * kind (L1/L2) that grew past its merge-base size fails instead (REQ-LIB-111) —
- * existing debt stays a warn, new debt breaks the build — and a ratchet that cannot
+ * kind (L1/L2) that grew past its merge-base size, or whose path is absent at the
+ * merge-base, fails instead (REQ-LIB-111) — existing debt stays a warn, new debt
+ * breaks the build — and a ratchet that cannot
  * be resolved fails closed on `.prospec.yaml`, naming the fix for its cause. L0
  * (agent-injected config) is out of scope. An unavailable source (no knowledge base)
  * skips, never a fabricated pass.
@@ -808,25 +809,31 @@ export function evaluateKnowledgeSize(src: KnowledgeSizeSource): CheckOutcome {
       remedy: rule.remedy,
     };
     const over = `${rule.label} over ${unit === 'tokens' ? 'token' : 'line'} budget`;
-    const graded = ratchetGrade(ratchet, rule, item, unit);
+    const graded = ratchetGrade(ratchet, rule, item, unit, budget);
     if (graded !== undefined) Object.assign(facts, graded.facts);
     if (graded === undefined || !graded.grew || !('base_actual' in graded.facts)) {
       push('warn', item.source_path, `${over}: ${measured} > ${budget} ${budgetKey} budget — ${rule.remedy}`, facts);
       return;
     }
-    const was = graded.facts.base_actual === null ? 'absent' : `${graded.facts.base_actual} ${unit}`;
-    push(
-      'fail',
-      item.source_path,
-      `${over} and grew past its merge-base size: ${measured} > ${budget} ${budgetKey} budget; ` +
-        `${was} at merge-base ${graded.facts.base_commit.slice(0, 12)} — ${rule.remedy}`,
-      facts,
-    );
+    const at = `at merge-base ${graded.facts.base_commit.slice(0, 12)}`;
+    // The compared size, when carriage returns made it differ from the reported one.
+    const lf = item.lf_measure !== undefined && item.lf_measure[unit] !== item[unit]
+      ? ` (${item.lf_measure[unit]} ${unit} without carriage returns)`
+      : '';
+    // A path the merge-base lacks (new, or renamed) has no size to have grown from.
+    const detail =
+      graded.facts.base_actual === null
+        ? `${over} and absent ${at} (a new or renamed path): ${measured}${lf} > ${budget} ${budgetKey} budget — ${rule.remedy}`
+        : `${over} and grew past its merge-base size: ${measured}${lf} > ${budget} ${budgetKey} budget; ` +
+          `${graded.facts.base_actual} ${unit} ${at} — ${rule.remedy}`;
+    push('fail', item.source_path, detail, facts);
   };
   for (const item of src.items) {
     const rule: KnowledgeSizeRule = KNOWLEDGE_SIZE_RULES[item.kind];
     const tokenBudget = src.budget[rule.tokenKey];
-    if (item.tokens > tokenBudget) {
+    // the same predicate the ratchet picked its merge-base targets with
+    const over = overBudgetUnits(item.kind, src.budget, item);
+    if (over.tokens) {
       overUnit(item, rule, 'tokens', rule.tokenKey, `${item.tokens} tokens (${TOKEN_ESTIMATOR_LABEL})`);
     } else if (src.budget.headroom !== undefined) {
       const headroomThreshold = Math.floor(tokenBudget * src.budget.headroom);
@@ -848,7 +855,7 @@ export function evaluateKnowledgeSize(src: KnowledgeSizeSource): CheckOutcome {
       }
     }
     if (rule.lineKey === undefined) continue;
-    if (item.lines > src.budget[rule.lineKey]) {
+    if (over.lines) {
       overUnit(item, rule, 'lines', rule.lineKey, `${item.lines} lines`);
     }
   }
@@ -895,14 +902,17 @@ const RATCHET_REMEDY: Record<KnowledgeSizeRatchetCause, string> = {
 /**
  * The ratchet's verdict on one over-budget unit: undefined when the ratchet does
  * not apply (not configured, unresolvable, or a kind it does not govern), otherwise
- * the structured facts to attach and whether the unit grew past its merge-base size.
- * An absent base (`null`) is new debt, so it counts as grown.
+ * the structured facts to attach and whether the unit fails: measured without carriage
+ * returns it is still over `budget` and either grew past its equally normalized merge-base
+ * size or its path is absent at the merge-base (`null`) — new debt, whose detail says
+ * absent rather than grown.
  */
 function ratchetGrade(
   ratchet: KnowledgeSizeSource['ratchet'],
   rule: KnowledgeSizeRule,
   item: KnowledgeSizeItem,
   unit: 'tokens' | 'lines',
+  budget: number,
 ):
   | { grew: false; facts: { base_commit: string; ratchet_skipped: string } }
   | { grew: boolean; facts: { base_commit: string; base_actual: number | null } }
@@ -912,7 +922,13 @@ function ratchetGrade(
     return { grew: false, facts: { base_commit: ratchet.merge_base, ratchet_skipped: item.ratchet.skipped } };
   }
   const base = item.ratchet.base === null ? null : item.ratchet.base[unit];
-  return { grew: base === null || item[unit] > base, facts: { base_commit: ratchet.merge_base, base_actual: base } };
+  // the merge-base text was measured without carriage returns, so compare it with the
+  // equally normalized current text — never with the reported (raw) measurement
+  const current = (item.lf_measure ?? item)[unit];
+  // Over budget only by its carriage returns, the same content checked out with LF has no
+  // finding at all — so the ratchet fails a unit only when its normalized size is over too.
+  const grew = current > budget && (base === null || current > base);
+  return { grew, facts: { base_commit: ratchet.merge_base, base_actual: base } };
 }
 
 /**

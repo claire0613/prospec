@@ -264,7 +264,8 @@ export const KnowledgeSizeFindingSchema = z.object({
   /** The `knowledge.size_ratchet` merge-base commit — present on an over-tier finding
    *  of a ratchet-governed item while the ratchet is resolved. */
   base_commit: z.string().min(1).optional(),
-  /** The same unit measured at that merge-base; `null` when the file did not exist there. */
+  /** The same unit measured at that merge-base with carriage returns removed (as the compared
+   *  current size is, unlike the raw `actual`); `null` when the path did not exist there. */
   base_actual: z.number().int().nonnegative().nullable().optional(),
   /** Why the ratchet was not applied to this file (e.g. a symlink) — in place of `base_actual`. */
   ratchet_skipped: z.string().min(1).optional(),

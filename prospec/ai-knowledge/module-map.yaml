@@ -64,8 +64,8 @@ modules:
       - MCP 契約
       - 模組分類
     rationale: Leaf module with zero internal deps — all others import from here
-    last_verified: 2026-11-09T06:58:22.914Z
-    source_digest: source-v1:4bb7d3cc9f673c6d03a4d328d58f4e7d80f42ef983a41a7abd2921e33762a095
+    last_verified: 2026-11-10T08:46:19.182Z
+    source_digest: source-v1:3fc8cff055bed4c434864095e3f133f196ba8f3b9fee9c23dc9b0ccc014a6b65
   - name: lib
     description: Shared stateless utilities — config, file I/O, Handlebars
       rendering, scanning, token estimation and cost arithmetic, the zero-LLM
@@ -144,8 +144,8 @@ modules:
       - 漂移檢查
       - 知識讀取
     rationale: Foundational infrastructure shared across services and benchmark scripts
-    last_verified: 2026-11-09T06:59:02.463Z
-    source_digest: source-v1:49e3bf8f4e3f25c957157f42db8d9b842625a863477885924034d7c28e0ecee1
+    last_verified: 2026-11-10T09:18:19.207Z
+    source_digest: source-v1:c5d2b36505037bfb4cfae8ffb5b980e10dd52bc1eec778d77cb7bdd0b74ad532
   - name: services
     description: Business logic — one `execute()` service per command — including
       shared-output agent invocation-guidance rendering — init / quickstart /
@@ -313,11 +313,11 @@ modules:
       - 複雜度適配
       - CI 閘門
     rationale: Pure resources — no logic, consumed by lib/template.ts
-    last_verified: 2026-11-09T06:59:02.463Z
-    source_digest: source-v1:c541f73ae8d15fa7c77eb03d798db3607915d34a0aea2e639535d07bb9efd615
+    last_verified: 2026-11-10T09:18:19.207Z
+    source_digest: source-v1:b6ffdd2e9786995b04448e910b031c8cde6c043ea585b7a31cb1c12b3f4618b5
   - name: tests
-    description: 4-layer test suite — 350 files, 9,593 tests (unit 6883 + contract
-      2130 + integration 318 + e2e 262). Validates every module — format and
+    description: 4-layer test suite — 350 files, 9,613 tests (unit 6892 + contract
+      2132 + integration 327 + e2e 262). Validates every module — format and
       public-document contracts, the cli-first probe + station-command
       contracts, the drift engine, retained workflow/startup guards, and the MCP
       protocol over in-memory transport. Real-worktree history fixtures cover
@@ -363,5 +363,5 @@ modules:
       - 驗證
       - vitest
     rationale: Quality gate — validates all layers with pyramid coverage
-    last_verified: 2026-11-09T06:59:02.463Z
-    source_digest: source-v1:dc08efb8997cd2814a32690aeb077969f04cf6dcd5b2d6e3e80b0ac57d31e66b
+    last_verified: 2026-11-10T09:18:19.207Z
+    source_digest: source-v1:498b4e7456be6ab34bf4820d4a420038e6bcf42311a6701a5c432c0541cf7ce5

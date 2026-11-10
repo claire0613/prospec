@@ -603,7 +603,7 @@ Honesty rules: an unavailable source degrades the check to `skipped` with an exp
 
 #### Tuning the `knowledge-size` budgets
 
-`knowledge-size` reports over-budget files as WARN without affecting the `--strict` exit code. With `knowledge.size_ratchet` set, an over-budget L1/L2 file that grew past its merge-base size is a FAIL, so `--strict` exits non-zero. See the [Configuration Reference](./configuration.md#knowledge-budgets) for per-surface defaults, `knowledge.token_budget` fields, the ratchet's git-history requirements, fixed skill/reference budgets and remedies for over-budget files.
+`knowledge-size` reports over-budget files as WARN without affecting the `--strict` exit code. With `knowledge.size_ratchet` set, an over-budget L1/L2 file that grew past its merge-base size, or that is absent at the merge-base, is a FAIL, so `--strict` exits non-zero; line endings never count as growth. See the [Configuration Reference](./configuration.md#knowledge-budgets) for per-surface defaults, `knowledge.token_budget` fields, the ratchet's git-history requirements, fixed skill/reference budgets and remedies for over-budget files.
 
 <details>
 <summary>Mutation testing (on-demand audit — NOT a gate)</summary>

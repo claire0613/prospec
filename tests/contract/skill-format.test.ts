@@ -4555,7 +4555,7 @@ describe('Startup Loading cache-stable prefix ordering (REQ-TEMPLATES-080/081)',
   // Review removes metadata-format's unconditional human-confirmation premise: 3_999 → 3_978.
   // ratchet-knowledge-size: drift-report-format gained the size-ratchet fields and the shared
   // knowledge-loading-rules partial names the ratchet, with equivalent prose compacted. Anchors unchanged.
-  // harden-knowledge-size-ratchet (PR #406 review, R-14): the knowledge-update / knowledge-generate
+  // harden-knowledge-size-ratchet: the knowledge-update / knowledge-generate
   // ratchet cap (REQ-TEMPLATES-275) and drift-report-format's skip scope plus its two restored
   // qualifiers (REQ-TEMPLATES-274) — new prose compacted first, the rest could not be offset without
   // dropping pinned guidance. Reference total 48_062 → 48_097 and cumulative 86_279 → 86_561
@@ -11928,7 +11928,7 @@ describe('workflow artifact preservation guidance', () => {
 });
 
 // REQ-TEMPLATES-275 — with `knowledge.size_ratchet` set, the two knowledge skills cap an
-// already over-budget L1/L2 file at its merge-base size (PR #406 review, R-14). The rule
+// already over-budget L1/L2 file at its merge-base size. The rule
 // lives in the skills only: `_knowledge-loading-rules` also renders into every downstream
 // index.md, where an added sentence would grow that L1 file.
 describe('knowledge skills keep an over-budget L1/L2 file from growing under the ratchet (REQ-TEMPLATES-275)', () => {
@@ -11974,10 +11974,14 @@ describe('knowledge skills keep an over-budget L1/L2 file from growing under the
     },
   ]);
 
-  it('keeps the cap out of the loading-rules partial that renders into downstream index.md', () => {
-    const partial = renderTemplate('knowledge/index.md.hbs', { ...TEMPLATE_CONTEXT, modules: [], project_name: 'x' });
-    expect(partial).toContain('Progressive Knowledge Loading Strategy');
-    expect(partial).not.toMatch(/Over-budget under the ratchet|may not end larger/);
+  // The loading-rules partial renders into every downstream index.md, an L1 file the ratchet
+  // caps at its merge-base size, so the rendered index may not grow in any wording. Raising this
+  // anchor is an edit to this line that the PR must disclose.
+  const DOWNSTREAM_INDEX_TOKEN_ANCHOR = 819;
+  it('keeps the rendered downstream index.md, loading-rules partial included, within its anchored size', () => {
+    const index = renderTemplate('knowledge/index.md.hbs', { ...TEMPLATE_CONTEXT, modules: [], project_name: 'x' });
+    expect(index).toContain('Progressive Knowledge Loading Strategy');
+    expect(estimateTokens(index)).toBeLessThanOrEqual(DOWNSTREAM_INDEX_TOKEN_ANCHOR);
   });
 });
 
@@ -11991,6 +11995,19 @@ describe('drift-report-format covers the ratchet skips and keeps its qualifiers 
     const findings = flat(sectionOf(ref(), '## `structural.findings[]`'));
     expect(findings).toMatch(/`ratchet_skipped`[^.]*gitlink or symlink[^.]*not a regular file/);
     expect(findings).toMatch(/fix for its cause/);
+  });
+
+  it('separates an absent path from growth and says base_actual is measured without carriage returns', () => {
+    const findings = flat(sectionOf(ref(), '## `structural.findings[]`'));
+    expect(findings).toMatch(/absent at merge-base `base_commit` \(`base_actual: null`\)/);
+    expect(findings).toMatch(/`base_actual`[^.]*carriage returns removed/);
+    expect(findings).not.toMatch(/grew/);
+  });
+
+  it('keeps the whole knowledge_health object optional, not just its coverage', () => {
+    expect(flat(sectionOf(ref(), '## `structural.knowledge_health`'))).toContain(
+      'The whole object is **optional** (absent without a module map)',
+    );
   });
 
   it('restores the knowledge_health and constitution qualifiers in their own sections', () => {

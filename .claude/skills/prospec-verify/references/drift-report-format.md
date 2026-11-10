@@ -80,10 +80,12 @@ subject_skips? }`, adopted **verbatim**.
 task — use these, don't recount tasks.md. A file's `knowledge-size` finding carries additive
 `knowledge_size` — `{ surface, budget_key, budget, actual, unit, tier, remedy?, base_commit?, base_actual?,
 ratchet_skipped? }`; `unit` ∈ `tokens` | `lines`, `tier` ∈ `over` | `headroom` (no `remedy`). It is `warn`;
-under `knowledge.size_ratchet`, an over-budget L1/L2 unit larger than at merge-base `base_commit`
-(`base_actual`, `null` = absent) is `fail`, `ratchet_skipped` says why it went uncompared (its merge-base
-path is through a gitlink or symlink, or not a regular file), and an unresolvable ratchet is a `fail` on
-`.prospec.yaml` naming the fix for its cause.
+under `knowledge.size_ratchet`, an over-budget L1/L2 unit is `fail` when absent at merge-base
+`base_commit` (`base_actual: null`) or larger than there — `base_actual` and the compared current size
+both with carriage returns removed (that size must itself be over budget), so `base_actual` may sit
+below a CRLF `actual`; `ratchet_skipped`
+says why it went uncompared (its merge-base path is through a gitlink or symlink, or not a regular
+file), and an unresolvable ratchet is a `fail` on `.prospec.yaml` naming the fix for its cause.
 
 ## `structural.knowledge_health` (optional) — module freshness + coverage
 
@@ -105,7 +107,7 @@ path is through a gitlink or symlink, or not a regular file), and an unresolvabl
   `digest-match` / `digest-mismatch`. No README also yields a `coverage gap` finding.
 - Commit-time keys stay for continuity, never drive `stale`, and are null/absent without commit times
   (shallow, unborn HEAD); `last_sub_module_commit` is **absent** without sub-modules, never null-filled.
-- `coverage` is `{ documented, total }` README counts. The object is **optional** (absent without
+- `coverage` is `{ documented, total }` README counts. The whole object is **optional** (absent without
   a module map) → "no freshness facts", not all-fresh.
 
 ## `structural.constitution` (optional) — the rule inventory verify audits against
