@@ -68,6 +68,7 @@ _(None)_
 
 | Date | Change | Impact | Stories/REQs |
 |------|--------|--------|--------------|
+| 2026-11-10 | fix-ratchet-review-findings | MODIFIED REQ-LIB-111; MODIFIED REQ-TESTS-148 | REQ-LIB-111, REQ-TESTS-148 |
 | 2026-11-10 | harden-knowledge-size-ratchet | ADDED REQ-TEMPLATES-275; MODIFIED REQ-LIB-111; MODIFIED REQ-TESTS-148; MODIFIED REQ-TEMPLATES-274 | REQ-TEMPLATES-275, REQ-LIB-111, REQ-TESTS-148, REQ-TEMPLATES-274 |
 | 2026-11-04 | reconcile-feature-ownership | Relocate unchanged identity and complete behavior from drift-checks/US-1 to drift-detection/US-8; retain the source container as deprecated history | drift-checks/US-1/REQ-LIB-001 → drift-detection/US-8/REQ-LIB-001 |
 | 2026-11-04 | reconcile-feature-ownership | Relocate unchanged identity and complete behavior from drift-checks/US-3 to drift-detection/US-8; retain the source container as deprecated history | drift-checks/US-3/REQ-LIB-002 → drift-detection/US-8/REQ-LIB-002 |
