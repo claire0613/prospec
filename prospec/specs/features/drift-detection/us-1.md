@@ -133,6 +133,7 @@ so that drift checks are enforced in the CI main pipeline without burning any to
 - WHEN an untrusted path or detail carries control characters, THEN they are filtered by `sanitizeTerminal()` before printing
 - WHEN `--strict` is set and a FAIL exists, THEN the exit code is unchanged by the grouped rendering — display grouping never alters which findings or severities are reported
 - WHEN a `knowledge-size` finding is fail-class, THEN its line is labelled fail, never warn
+- WHEN a `knowledge-size` finding carries `ratchet_actual`, THEN its line shows that value beside the merge-base value, so the two numbers it pairs share one basis; a finding without it renders exactly as before
 
 #### REQ-TEMPLATES-091: CI Workflow template
 Two jobs: check (checkout `fetch-depth: 0` → `--strict --json` (`shell: bash` enables pipefail, tee must not mask the exit code) → report artifact) + comment (**no checkout**, only downloads the artifact, an off-the-shelf sticky action posts a 4-space-indented code block — no fence can escape, `head -c 60000` cap). Supply-chain hardening is the default: third-party actions are pinned to full commit SHAs, minimal-privilege `permissions:`.
@@ -155,11 +156,12 @@ Two jobs: check (checkout `fetch-depth: 0` → `--strict --json` (`shell: bash` 
 ---
 
 #### REQ-TYPES-083: knowledge-size structured finding field
-The Drift Report schema's `DriftFinding` carries an OPTIONAL `knowledge_size` object — `{ surface, budget_key, budget, actual, unit, tier, remedy?, base_commit?, base_actual?, ratchet_skipped? }` — populated only for `knowledge-size` findings; it is additive and optional, so a report without it still validates and existing consumers are unaffected.
+The Drift Report schema's `DriftFinding` carries an OPTIONAL `knowledge_size` object — `{ surface, budget_key, budget, actual, unit, tier, remedy?, base_commit?, base_actual?, ratchet_actual?, ratchet_skipped? }` — populated only for `knowledge-size` findings; it is additive and optional, so a report without it still validates and existing consumers are unaffected.
 - WHEN a `knowledge-size` finding is serialized, THEN it carries a `knowledge_size` object whose `surface` is the load-surface label, `budget_key`/`budget` name the threshold, `actual`/`unit` (`tokens`|`lines`) the measurement, `tier` (`over`|`headroom`) the band, and `remedy` the convergence hint (absent for the headroom band)
 - WHEN any other check's finding is serialized, THEN `knowledge_size` is absent and the finding validates unchanged
 - WHEN an older report without `knowledge_size` is parsed, THEN it still validates because the field is optional
 - WHEN the REQ-LIB-111 ratchet is resolved and a finding is over-tier for a ratchet-governed item, THEN `knowledge_size` also carries `base_commit` and either `base_actual` (the merge-base value of the same unit, or `null` when the file was absent there) or `ratchet_skipped`; every other finding omits all three
+- WHEN a ratchet-compared finding's carriage-return-free current size differs from `actual`, THEN `knowledge_size` also carries it as `ratchet_actual`; otherwise `ratchet_actual` is absent
 
 ---
 
