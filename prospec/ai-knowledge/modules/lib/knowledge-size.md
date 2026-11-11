@@ -17,7 +17,7 @@
 
 ## Dependencies
 
-**Depends on:** `types/config` (`KNOWLEDGE_SIZE_RULES`, whose `ratchet` flag is true for `l1`/`l2` only; `knowledge.size_ratchet` is shape-agnostic in the schema), `types/drift-report` (`knowledge_size` with optional `base_commit`/`base_actual`/`ratchet_skipped`), `git-read` (`GIT_READ_TIMEOUT_MS`; `readIndexEntries` behind `listPathspecs`)
+**Depends on:** `types/config` (`KNOWLEDGE_SIZE_RULES`, whose `ratchet` flag is true for `l1`/`l2` only; `knowledge.size_ratchet` is shape-agnostic in the schema), `types/drift-report` (`knowledge_size` with optional `base_commit`/`base_actual`/`ratchet_actual`/`ratchet_skipped`), `git-read` (`GIT_READ_TIMEOUT_MS`; `readIndexEntries` behind `listPathspecs`)
 **Used by:** `drift-assessment.ts` → the check, status, verify-record and archive entry points
 
 ## Modification Guide
@@ -38,6 +38,6 @@
 - Only modes 100644/100755 are measured: `cat-file --filters` on a tree, or on a gitlink whose oid is a commit of the same repository, exits 0 and prints that object.
 - With `core.ignorecase=true` the lookup path is the index's one case-insensitive match (`ls-files :(icase,literal)` through `listPathspecs`, which drops only `GIT_*_PATHSPECS` and keeps the caller's `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`); `ls-tree` rejects `icase` magic. Several matches → skipped; none (untracked) → the working-tree path. The probe needs `git config --default` (git ≥ 2.18) and runs only when some item is a target.
 - `gitCapture` returns null without an exit code, so a failed or timed-out `merge-base` reads as no merge-base (`ref`) — whose fix therefore names the base, full history and a re-run.
-- Line endings never decide growth: the base blob and the current text (`lf_measure`, set only when the file holds a `\r`) are both measured with carriage returns removed, while `actual` stays raw — so `base_actual` can sit below a CRLF file's `actual`; a unit fails only when its normalized size is over budget too.
+- Line endings never decide growth: the base blob and the current text (`lf_measure`, set only when the file holds a `\r`) are both measured with carriage returns removed, while `actual` stays raw; a unit fails only when its normalized size is over budget too. When that size differs from `actual` the finding carries it as `ratchet_actual`, which the fail detail and the check output pair with `base_actual`.
 - An absent base (`null`) fails with its own detail ("absent at merge-base", a new or renamed path), never as "grew past".
 - Git-bound tests pin `core.ignorecase` (`git init` derives it from the filesystem) so macOS and Linux CI take the same branch.

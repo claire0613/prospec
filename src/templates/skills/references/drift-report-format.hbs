@@ -79,13 +79,15 @@ subject_skips? }`, adopted **verbatim**.
 `check: 'task-completion'`, each finding carries the `source_path` + `line` of one unchecked code
 task — use these, don't recount tasks.md. A file's `knowledge-size` finding carries additive
 `knowledge_size` — `{ surface, budget_key, budget, actual, unit, tier, remedy?, base_commit?, base_actual?,
-ratchet_skipped? }`; `unit` ∈ `tokens` | `lines`, `tier` ∈ `over` | `headroom` (no `remedy`). It is `warn`;
-under `knowledge.size_ratchet`, an over-budget L1/L2 unit is `fail` when absent at merge-base
+ratchet_actual?, ratchet_skipped? }`; `unit` ∈ `tokens` | `lines`, `tier` ∈ `over` | `headroom` (no `remedy`).
+It is `warn`; under `knowledge.size_ratchet`, an over-budget L1/L2 unit is `fail` when absent at merge-base
 `base_commit` (`base_actual: null`) or larger than there — `base_actual` and the compared current size
-both with carriage returns removed (that size must itself be over budget), so `base_actual` may sit
-below a CRLF `actual`; `ratchet_skipped`
-says why it went uncompared (its merge-base path is through a gitlink or symlink, or not a regular
-file), and an unresolvable ratchet is a `fail` on `.prospec.yaml` naming the fix for its cause.
+both with carriage returns removed (that size must itself be over budget); `ratchet_actual`, the current
+size with carriage returns removed and compared with `base_actual`, appears when it differs from a CRLF
+`actual`; `ratchet_skipped` says why it went uncompared (its merge-base path is through a gitlink or
+symlink or not a regular file, it is or passes through a symlink in the working tree, or under
+`core.ignorecase` more than one index path matches it), and an unresolvable ratchet is a `fail` on
+`.prospec.yaml` naming the fix for its cause.
 
 ## `structural.knowledge_health` (optional) — module freshness + coverage
 

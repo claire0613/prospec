@@ -12001,7 +12001,12 @@ describe('drift-report-format covers the ratchet skips and keeps its qualifiers 
     const findings = flat(sectionOf(ref(), '## `structural.findings[]`'));
     expect(findings).toMatch(/absent at merge-base `base_commit` \(`base_actual: null`\)/);
     expect(findings).toMatch(/`base_actual`[^.]*carriage returns removed/);
-    expect(findings).not.toMatch(/grew/);
+  });
+
+  it('names ratchet_actual as the carriage-return-free current size compared with base_actual', () => {
+    const findings = flat(sectionOf(ref(), '## `structural.findings[]`'));
+    expect(findings).toMatch(/base_actual\?, ratchet_actual\?,/);
+    expect(findings).toMatch(/`ratchet_actual`[^.;]*carriage returns removed[^.;]*compared with `base_actual`/);
   });
 
   it('keeps the whole knowledge_health object optional, not just its coverage', () => {

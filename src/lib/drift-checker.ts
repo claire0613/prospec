@@ -817,8 +817,8 @@ export function evaluateKnowledgeSize(src: KnowledgeSizeSource): CheckOutcome {
     }
     const at = `at merge-base ${graded.facts.base_commit.slice(0, 12)}`;
     // The compared size, when carriage returns made it differ from the reported one.
-    const lf = item.lf_measure !== undefined && item.lf_measure[unit] !== item[unit]
-      ? ` (${item.lf_measure[unit]} ${unit} without carriage returns)`
+    const lf = graded.facts.ratchet_actual !== undefined
+      ? ` (${graded.facts.ratchet_actual} ${unit} without carriage returns)`
       : '';
     // A path the merge-base lacks (new, or renamed) has no size to have grown from.
     const detail =
@@ -905,7 +905,8 @@ const RATCHET_REMEDY: Record<KnowledgeSizeRatchetCause, string> = {
  * the structured facts to attach and whether the unit fails: measured without carriage
  * returns it is still over `budget` and either grew past its equally normalized merge-base
  * size or its path is absent at the merge-base (`null`) — new debt, whose detail says
- * absent rather than grown.
+ * absent rather than grown. The normalized current size rides along as `ratchet_actual`
+ * whenever it differs from the raw measurement.
  */
 function ratchetGrade(
   ratchet: KnowledgeSizeSource['ratchet'],
@@ -915,7 +916,7 @@ function ratchetGrade(
   budget: number,
 ):
   | { grew: false; facts: { base_commit: string; ratchet_skipped: string } }
-  | { grew: boolean; facts: { base_commit: string; base_actual: number | null } }
+  | { grew: boolean; facts: { base_commit: string; base_actual: number | null; ratchet_actual?: number } }
   | undefined {
   if (ratchet?.status !== 'resolved' || !rule.ratchet || item.ratchet === undefined) return undefined;
   if ('skipped' in item.ratchet) {
@@ -928,7 +929,16 @@ function ratchetGrade(
   // Over budget only by its carriage returns, the same content checked out with LF has no
   // finding at all — so the ratchet fails a unit only when its normalized size is over too.
   const grew = current > budget && (base === null || current > base);
-  return { grew, facts: { base_commit: ratchet.merge_base, base_actual: base } };
+  // the compared value travels with the finding only when it differs from the raw `actual`,
+  // so a reader can pair it with `base_actual` on one basis
+  return {
+    grew,
+    facts: {
+      base_commit: ratchet.merge_base,
+      base_actual: base,
+      ...(current === item[unit] ? {} : { ratchet_actual: current }),
+    },
+  };
 }
 
 /**

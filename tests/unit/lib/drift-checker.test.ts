@@ -450,6 +450,42 @@ describe('evaluateKnowledgeSize — size ratchet (REQ-LIB-111)', () => {
     expect(findingsFor(overBudget)).toHaveLength(1);
   });
 
+  // The carriage-return-free size the ratchet compared travels with the finding, so a reader
+  // (the check output, a --json consumer) can pair it with base_actual on one basis.
+  describe('ratchet_actual', () => {
+    const crlf = (base: { tokens: number; lines: number } | null) => ({
+      source_path: README, kind: 'l2' as const, tokens: 520, lines: 40,
+      lf_measure: { tokens: 500, lines: 40 }, ratchet: { base },
+    });
+
+    it('carries the compared size when carriage returns made it differ from actual', () => {
+      const f = only(evaluateKnowledgeSize(resolved([crlf({ tokens: 500, lines: 40 })])));
+      expect(f.severity).toBe('warn');
+      expect(f.knowledge_size).toMatchObject({ actual: 520, base_actual: 500, ratchet_actual: 500 });
+    });
+
+    it('names that same value in the fail detail', () => {
+      const f = only(evaluateKnowledgeSize(resolved([crlf({ tokens: 450, lines: 40 })])));
+      expect(f.severity).toBe('fail');
+      expect(f.knowledge_size!.ratchet_actual).toBe(500);
+      expect(f.detail).toContain('(500 tokens without carriage returns)');
+    });
+
+    it('is absent where nothing differs: no lf_measure, an equal unit, a skip, or no ratchet', () => {
+      const noCr = { source_path: README, kind: 'l2' as const, tokens: 520, lines: 40, ratchet: { base: { tokens: 500, lines: 40 } } };
+      const linesOnly = only(evaluateKnowledgeSize(resolved([{ ...crlf({ tokens: 500, lines: 40 }), lines: 140, lf_measure: { tokens: 500, lines: 140 } }])), 'lines');
+      const skipped = { ...crlf(null), ratchet: { skipped: 'symlink at the merge-base' } };
+      for (const f of [
+        only(evaluateKnowledgeSize(resolved([noCr]))),
+        linesOnly,
+        only(evaluateKnowledgeSize(resolved([skipped]))),
+        only(evaluateKnowledgeSize(sizeSrc([crlf({ tokens: 500, lines: 40 })]))),
+      ]) {
+        expect(f.knowledge_size).not.toHaveProperty('ratchet_actual');
+      }
+    });
+  });
+
   it('fails a file absent at the merge-base, recording base_actual null', () => {
     const r = evaluateKnowledgeSize(resolved([
       { source_path: README, kind: 'l2', tokens: 500, lines: 40, ratchet: { base: null } },

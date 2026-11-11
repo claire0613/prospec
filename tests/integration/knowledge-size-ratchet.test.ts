@@ -63,6 +63,7 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
 
   it('resolves the merge-base and measures an over-budget file there', () => {
     const src = collect({ base: 'base' });
+    expect(findingAt(src, README)!.knowledge_size).not.toHaveProperty('ratchet_actual');
     expect(src.ratchet).toEqual({ status: 'resolved', base_ref: 'base', merge_base: git(root, 'rev-parse', 'base').trim() });
     expect(itemAt(src, README).ratchet).toEqual({ base: { tokens: 100, lines: 1 } });
     // within budget → not ratchet-measured, so no git read is spent on it
@@ -138,7 +139,11 @@ describe('collectKnowledgeSize — size ratchet on a real repository', () => {
       const item = itemAt(src, README);
       expect(item.lf_measure).toBeDefined();
       expect(item.ratchet).toEqual({ base: item.lf_measure });
-      expect(findingAt(src, README)).toMatchObject({ severity: 'warn' });
+      // the finding carries the compared size, equal to the unchanged merge-base size
+      expect(findingAt(src, README)).toMatchObject({
+        severity: 'warn',
+        knowledge_size: { actual: item.tokens, ratchet_actual: item.lf_measure!.tokens, base_actual: item.lf_measure!.tokens },
+      });
     });
 
     it('keeps an unchanged file saved with CRLF under core.autocrlf=input a warn', () => {

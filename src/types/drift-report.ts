@@ -267,6 +267,9 @@ export const KnowledgeSizeFindingSchema = z.object({
   /** The same unit measured at that merge-base with carriage returns removed (as the compared
    *  current size is, unlike the raw `actual`); `null` when the path did not exist there. */
   base_actual: z.number().int().nonnegative().nullable().optional(),
+  /** The same unit of the current file with carriage returns removed — the value the ratchet
+   *  compared with `base_actual` — present only when it differs from the raw `actual`. */
+  ratchet_actual: z.number().int().nonnegative().optional(),
   /** Why the ratchet was not applied to this file (e.g. a symlink) — in place of `base_actual`. */
   ratchet_skipped: z.string().min(1).optional(),
 });
